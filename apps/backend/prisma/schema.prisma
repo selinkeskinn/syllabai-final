@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  INSTRUCTOR
+}
+
+enum DeadlineType {
+  ASSIGNMENT
+  PROJECT
+  EXAM
+  QUIZ
+  OTHER
+}
+
+enum NotificationType {
+  SYLLABUS_UPDATED
+  ANNOUNCEMENT
+  DEADLINE_REMINDER
+  ENROLLMENT
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  name          String
+  firstName     String?
+  lastName      String?
+  studentId     String?        @unique
+  avatarUrl     String?
+  isActive      Boolean   @default(true)
+  deactivatedAt DateTime?
+
+
+  emailNotificationsEnabled        Boolean @default(true)
+  pushNotificationsEnabled         Boolean @default(true)
+  assignmentRemindersEnabled       Boolean @default(true)
+  gradeUpdatesEnabled              Boolean @default(true)
+  courseAnnouncementsEnabled       Boolean @default(true)
+  deadlineAlertsEnabled            Boolean @default(true)
+
+  password      String
+  role          Role           @default(STUDENT)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  courses       Course[]       @relation("InstructorCourses")
+  enrollments   Enrollment[]
+  notifications Notification[]
+  feedbacks     Feedback[]
+}
+
+model Course {
+  id           String       @id @default(uuid())
+  code         String       @unique
+  title        String
+  description  String?
+  semester     String?
+  instructorId String
+  joinKey      String?      @unique
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  instructor   User         @relation("InstructorCourses", fields: [instructorId], references: [id])
+  syllabus     Syllabus?
+  enrollments  Enrollment[]
+  deadlines    Deadline[]
+  feedbacks   Feedback[]
+  announcements Announcement[]
+}
+
+model Syllabus {
+  id          String           @id @default(uuid())
+  courseId    String           @unique
+  title       String
+  description String?
+  grading     String?
+  policies    String?
+  resources   String?
+  documentFileName String?
+  documentStoredFileName String?
+  documentMimeType String?
+  documentSizeKb Int?
+  documentUploadedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  course      Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  weeks       SyllabusWeek[]
+  versions    SyllabusVersion[]
+}
+
+model SyllabusWeek {
+  id         String   @id @default(uuid())
+  syllabusId String
+  weekNo     Int
+  topic      String
+  details    String?
+  todo       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  syllabus   Syllabus @relation(fields: [syllabusId], references: [id], onDelete: Cascade)
+
+  @@unique([syllabusId, weekNo])
+}
+
+model SyllabusVersion {
+  id         String   @id @default(uuid())
+  syllabusId String
+  snapshot   Json
+  createdAt  DateTime @default(now())
+
+  syllabus   Syllabus @relation(fields: [syllabusId], references: [id], onDelete: Cascade)
+}
+
+model Enrollment {
+  id        String   @id @default(uuid())
+  userId    String
+  courseId  String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+  course    Course   @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+}
+
+model Deadline {
+  id          String       @id @default(uuid())
+  courseId    String
+  title       String
+  description String?
+  dueDate     DateTime
+  type        DeadlineType @default(ASSIGNMENT)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(ANNOUNCEMENT)
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id])
+}
+
+
+model Feedback {
+  id        String   @id @default(uuid())
+  courseId  String
+  userId    String?
+  rating    Int
+  tags      String[]
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+
+model Announcement {
+  id        String   @id @default(uuid())
+  courseId  String
+  title     String
+  content   String
+  type      String   @default("INFO")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
