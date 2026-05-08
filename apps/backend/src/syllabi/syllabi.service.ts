@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSyllabusDto } from './create-syllabus.dto';
 import { UpdateSyllabusDto } from './update-syllabus.dto';
@@ -46,11 +41,7 @@ export class SyllabiService {
         weeks: { orderBy: { weekNo: 'asc' } },
       },
     });
-
-    if (!syllabus) {
-      throw new NotFoundException('Syllabus not found');
-    }
-
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
     return syllabus;
   }
 
@@ -61,17 +52,13 @@ export class SyllabiService {
         weeks: { orderBy: { weekNo: 'asc' } },
       },
     });
-
     if (!syllabus) {
       throw new NotFoundException('Syllabus not found for this course');
     }
-
     return syllabus;
   }
 
-  async create(data: CreateSyllabusDto, instructorId: string) {
-    await this.ensureCourseOwner(data.courseId, instructorId);
-
+  create(data: CreateSyllabusDto) {
     return this.prisma.syllabus.create({
       data: {
         courseId: data.courseId,
@@ -87,22 +74,25 @@ export class SyllabiService {
     });
   }
 
-  async uploadDocument(
-    courseId: string,
-    file: UploadedSyllabusFile,
-    instructorId: string,
-  ) {
-    const course = await this.ensureCourseOwner(courseId, instructorId);
-
-    const existingSyllabus = await this.prisma.syllabus.findUnique({
-      where: { courseId },
+  async uploadDocument(courseId: string, file: UploadedSyllabusFile) {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
       include: {
-        course: true,
-        weeks: { orderBy: { weekNo: 'asc' } },
+        syllabus: {
+          include: {
+            course: true,
+            weeks: { orderBy: { weekNo: 'asc' } },
+          },
+        },
       },
     });
 
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
+
     const uploadedAt = new Date();
+    const existingSyllabus = course.syllabus;
     const documentData = {
       documentFileName: file.originalname,
       documentStoredFileName: file.filename,
@@ -141,9 +131,7 @@ export class SyllabiService {
     return savedSyllabus;
   }
 
-  async update(id: string, dto: UpdateSyllabusDto, instructorId: string) {
-    await this.ensureSyllabusOwner(id, instructorId);
-
+  async update(id: string, dto: UpdateSyllabusDto) {
     const existing = await this.findById(id);
     const existingWithStructuredFields = existing as typeof existing & {
       grading?: string | null;
@@ -156,6 +144,7 @@ export class SyllabiService {
       documentUploadedAt?: Date | null;
     };
 
+    // Create a version snapshot before updating
     await this.prisma.syllabusVersion.create({
       data: {
         syllabusId: id,
@@ -185,6 +174,7 @@ export class SyllabiService {
       },
     });
 
+    // Notify enrolled students
     await this.notifyEnrolledStudents(
       existing.courseId,
       `Syllabus for "${existing.course.title}" has been updated`,
@@ -201,6 +191,8 @@ export class SyllabiService {
     });
   }
 
+  // --- Weeks ---
+
   findWeeks(syllabusId: string) {
     return this.prisma.syllabusWeek.findMany({
       where: { syllabusId },
@@ -208,13 +200,7 @@ export class SyllabiService {
     });
   }
 
-  async createWeek(
-    syllabusId: string,
-    data: CreateSyllabusWeekDto,
-    instructorId: string,
-  ) {
-    await this.ensureSyllabusOwner(syllabusId, instructorId);
-
+  createWeek(syllabusId: string, data: CreateSyllabusWeekDto) {
     return this.prisma.syllabusWeek.create({
       data: {
         syllabusId,
@@ -226,19 +212,18 @@ export class SyllabiService {
     });
   }
 
-  async updateWeek(
-    syllabusId: string,
-    weekId: string,
-    dto: UpdateSyllabusWeekDto,
-    instructorId: string,
-  ) {
-    const week = await this.ensureWeekOwner(weekId, syllabusId, instructorId);
+  async updateWeek(weekId: string, dto: UpdateSyllabusWeekDto) {
+    const week = await this.prisma.syllabusWeek.findUnique({
+      where: { id: weekId },
+    });
+    if (!week) throw new NotFoundException('Week not found');
 
     const updated = await this.prisma.syllabusWeek.update({
       where: { id: weekId },
       data: dto,
     });
 
+    // Get syllabus to find course for notification
     const syllabus = await this.prisma.syllabus.findUnique({
       where: { id: week.syllabusId },
       include: { course: true },
@@ -255,99 +240,15 @@ export class SyllabiService {
     return updated;
   }
 
-  async deleteWeek(
-    syllabusId: string,
-    weekId: string,
-    instructorId: string,
-  ) {
-    await this.ensureWeekOwner(weekId, syllabusId, instructorId);
-
-    return this.prisma.syllabusWeek.delete({
-      where: { id: weekId },
-    });
-  }
-
-  private async ensureCourseOwner(courseId: string, instructorId: string) {
-    const course = await this.prisma.course.findUnique({
-      where: { id: courseId },
-      select: {
-        id: true,
-        code: true,
-        title: true,
-        instructorId: true,
-      },
-    });
-
-    if (!course) {
-      throw new NotFoundException('Course not found');
-    }
-
-    if (course.instructorId !== instructorId) {
-      throw new ForbiddenException('You can only manage your own course syllabi');
-    }
-
-    return course;
-  }
-
-  private async ensureSyllabusOwner(syllabusId: string, instructorId: string) {
-    const syllabus = await this.prisma.syllabus.findUnique({
-      where: { id: syllabusId },
-      include: {
-        course: {
-          select: {
-            id: true,
-            instructorId: true,
-          },
-        },
-      },
-    });
-
-    if (!syllabus) {
-      throw new NotFoundException('Syllabus not found');
-    }
-
-    if (syllabus.course.instructorId !== instructorId) {
-      throw new ForbiddenException('You can only manage your own course syllabi');
-    }
-
-    return syllabus;
-  }
-
-  private async ensureWeekOwner(
-    weekId: string,
-    syllabusId: string,
-    instructorId: string,
-  ) {
+  async deleteWeek(weekId: string) {
     const week = await this.prisma.syllabusWeek.findUnique({
       where: { id: weekId },
-      include: {
-        syllabus: {
-          include: {
-            course: {
-              select: {
-                id: true,
-                instructorId: true,
-              },
-            },
-          },
-        },
-      },
     });
-
-    if (!week) {
-      throw new NotFoundException('Week not found');
-    }
-
-    if (week.syllabusId !== syllabusId) {
-      throw new BadRequestException('Week does not belong to this syllabus');
-    }
-
-    if (week.syllabus.course.instructorId !== instructorId) {
-      throw new ForbiddenException('You can only manage your own syllabus weeks');
-    }
-
-    return week;
+    if (!week) throw new NotFoundException('Week not found');
+    return this.prisma.syllabusWeek.delete({ where: { id: weekId } });
   }
+
+  // --- Helpers ---
 
   private async notifyEnrolledStudents(
     courseId: string,

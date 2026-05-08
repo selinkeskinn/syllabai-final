@@ -1,28 +1,38 @@
-import { Controller, Get, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
-import { Roles } from '../auth/roles.decorator';
 import { EnrollmentsService } from './enrollments.service';
+import { CreateEnrollmentDto } from './create-enrollment.dto';
+import { JoinCourseDto } from './join-course.dto';
 
 @ApiTags('Enrollments')
 @Controller('enrollments')
-@UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
 export class EnrollmentsController {
   constructor(private readonly enrollmentsService: EnrollmentsService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('INSTRUCTOR')
-  @ApiOperation({ summary: 'List all enrollments (instructor only)' })
+  @ApiOperation({ summary: 'List all enrollments' })
   findAll() {
     return this.enrollmentsService.findAll();
   }
 
   @Get('mine')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user enrollments' })
   findMine(@Request() req: any) {
     return this.enrollmentsService.findByUser(req.user.userId);
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Create enrollment directly' })
+  create(@Body() body: CreateEnrollmentDto) {
+    return this.enrollmentsService.create(body);
+  }
+
+  @Post('join')
+  @ApiOperation({ summary: 'Join a course via join key' })
+  joinWithKey(@Body() body: JoinCourseDto) {
+    return this.enrollmentsService.joinWithKey(body);
   }
 }

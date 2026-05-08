@@ -78,7 +78,7 @@ const avatarUploadOptions = {
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)

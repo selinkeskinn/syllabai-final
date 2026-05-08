@@ -12,8 +12,6 @@ import {
   syllabusService,
 } from "@/services/syllabus.service";
 import { api } from "@/lib/api";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 import {
   ArrowLeft,
   Bell,
@@ -615,7 +613,7 @@ export default function InstructorCourseDetailPage() {
         .filter(Boolean)
         .slice(0, 5)
     : [
-        course.description ||
+        course?.description ||
           "Understand the course expectations, weekly plan, and assessment structure.",
         "Follow course announcements, deadlines, resources, and grading requirements.",
         "Apply course concepts through assignments, exams, projects, and weekly activities.",
@@ -647,20 +645,31 @@ export default function InstructorCourseDetailPage() {
                   </h1>
                   <p className="mt-1 text-sm text-slate-500">
                     {course.instructor?.name || "Instructor User"} •{" "}
-                    {course.semester || "Current Semester"}
+                    {course.semester || "Spring 2026"}
                   </p>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                     <span className="text-sm font-medium text-[rgb(109,156,245)]">
-                      Academic Week
+                      Academic Week: 8
                     </span>
                   </div>
 
-                  <NotificationBell />
+                  <button
+                    type="button"
+                    className="relative rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+                  >
+                    <Bell className="h-5 w-5 text-slate-600" />
+                    <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
+                  </button>
 
-                  <SettingsButton href="/instructor/settings" />
+                  <button
+                    type="button"
+                    className="rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+                  >
+                    <Settings className="h-5 w-5 text-slate-600" />
+                  </button>
                 </div>
               </div>
             </header>
@@ -1043,7 +1052,7 @@ export default function InstructorCourseDetailPage() {
                           Course Type
                         </p>
                         <p className="text-sm text-slate-900">
-                          {course.semester || "Current Semester"}
+                          {course.semester || "Spring 2026"}
                         </p>
                       </div>
                     </div>
@@ -1177,7 +1186,7 @@ export default function InstructorCourseDetailPage() {
                       </h3>
                       <p className="mt-1 text-sm text-slate-500">
                         Weekly schedule and important dates for{" "}
-                        {course.semester || "Current Semester"}
+                        {course.semester || "Spring 2026"}
                       </p>
                     </div>
 

@@ -131,7 +131,7 @@ export default function Layout({ children }: LayoutProps) {
                     {storedUser?.name || "Student User"}
                   </p>
                   <p className="truncate text-sm text-slate-500">
-                    {storedUser?.email || "Student email not available"}
+                    {storedUser?.email || "student@syllabai.local"}
                   </p>
                 </div>
               </div>

@@ -7,7 +7,8 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowUpRight,
-BookOpen,
+  Bell,
+  BookOpen,
   CalendarDays,
   Clock3,
   ChevronDown,
@@ -40,8 +41,6 @@ import {
   announcementService,
 } from "@/services/announcement.service";
 import { courseService } from "@/services/course.service";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 import {
   getSyllabusDescriptionText,
   getSyllabusDocumentMetadata,
@@ -589,8 +588,21 @@ export default function CourseDetailPage() {
                     Academic Week: {loadingSyllabus ? "..." : syllabusWeeks.length}
                   </p>
                 </div>
-                <NotificationBell />
-                <SettingsButton href="/settings" />
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  className="relative rounded-lg p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                >
+                  <Bell className="h-5 w-5" />
+                  <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Settings"
+                  className="rounded-lg p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                >
+                  <Settings className="h-5 w-5" />
+                </button>
               </div>
             </div>
           </div>
@@ -1016,7 +1028,7 @@ export default function CourseDetailPage() {
                         Course Type
                       </p>
                       <p className="text-sm text-slate-900">
-                        {course.semester || "Current Semester"}
+                        {course.semester || "Spring 2026 Semester"}
                       </p>
                     </div>
                   </div>
@@ -1170,7 +1182,7 @@ export default function CourseDetailPage() {
                       Course Calendar
                     </h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Weekly schedule and important dates for {course.semester || "Current Semester"}
+                      Weekly schedule and important dates for {course.semester || "Spring 2026"}
                     </p>
                   </div>
                 </div>

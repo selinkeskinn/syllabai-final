@@ -1,10 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';import { randomBytes } from 'crypto';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCourseDto } from './create-course.dto';
 import { UpdateCourseDto } from './update-course.dto';
@@ -135,60 +130,35 @@ export class CoursesService {
     }
   }
 
-   async create(data: CreateCourseDto & { instructorId: string }) {
-     const joinKey = await this.generateUniqueJoinKey();
+  async create(data: CreateCourseDto & { instructorId: string }) {
+    const joinKey = await this.generateUniqueJoinKey();
+    return this.prisma.course.create({
+      data: {
+        code: data.code,
+        title: data.title,
+        description: data.description,
+        semester: data.semester,
+        instructorId: data.instructorId,
+        joinKey,
+      },
+      include: {
+        instructor: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+    });
+  }
 
-     return this.prisma.course.create({
-       data: {
-         code: data.code,
-         title: data.title,
-         description: data.description,
-         semester: data.semester,
-         instructorId: data.instructorId,
-         joinKey,
-       },
-       include: {
-         instructor: {
-           select: { id: true, name: true, email: true, role: true },
-         },
-       },
-     });
-   }
+  async update(id: string, dto: UpdateCourseDto) {
+    await this.findById(id);
+    return this.prisma.course.update({
+      where: { id },
+      data: dto,
+    });
+  }
 
-   private async ensureCourseOwner(courseId: string, instructorId: string) {
-     const course = await this.prisma.course.findUnique({
-       where: { id: courseId },
-       select: {
-         id: true,
-         instructorId: true,
-       },
-     });
-
-     if (!course) {
-       throw new NotFoundException('Course not found');
-     }
-
-     if (course.instructorId !== instructorId) {
-       throw new ForbiddenException('You can only modify your own courses');
-     }
-
-     return course;
-   }
-
-   async update(id: string, dto: UpdateCourseDto, instructorId: string) {
-     await this.ensureCourseOwner(id, instructorId);
-
-     return this.prisma.course.update({
-       where: { id },
-       data: dto,
-     });
-   }
-
-   async delete(id: string, instructorId: string) {
-     await this.ensureCourseOwner(id, instructorId);
-
-     return this.prisma.course.delete({
-       where: { id },
-     });
-   }
- }
+  async delete(id: string) {
+    await this.findById(id);
+    return this.prisma.course.delete({ where: { id } });
+  }
+}

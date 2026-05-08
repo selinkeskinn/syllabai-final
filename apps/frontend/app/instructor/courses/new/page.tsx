@@ -128,7 +128,7 @@ export default function NewCoursePage() {
                   value={formData.semester}
                   onChange={handleChange}
                   className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., Current Semester"
+                  placeholder="e.g., Spring 2026"
                 />
               </div>
 
