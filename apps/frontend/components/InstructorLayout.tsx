@@ -77,7 +77,7 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
   const router = useRouter();
   const [user, setUser] = useState<StoredUser>({
     name: "Instructor User",
-    email: "Instructor email not available",
+    email: "instructor@test.com",
   });
 
   useEffect(() => {
@@ -88,14 +88,14 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
         const parsedUser = JSON.parse(storedUser) as StoredUser;
         setUser({
           name: parsedUser.name || "Instructor User",
-          email: parsedUser.email || "Instructor email not available",
+          email: parsedUser.email || "instructor@test.com",
           role: parsedUser.role,
         });
       }
     } catch {
       setUser({
         name: "Instructor User",
-        email: "Instructor email not available",
+        email: "instructor@test.com",
       });
     }
   }, []);
@@ -166,7 +166,7 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
                     {user.name || "Instructor User"}
                   </p>
                   <p className="truncate text-sm text-slate-500">
-                    {user.email || "Instructor email not available"}
+                    {user.email || "instructor@test.com"}
                   </p>
                 </div>
               </div>

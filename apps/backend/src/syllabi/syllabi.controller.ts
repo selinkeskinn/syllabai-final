@@ -11,7 +11,6 @@ import {
   UseGuards,
   UploadedFile,
   UseInterceptors,
-  Request,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -84,25 +83,25 @@ export class SyllabiController {
     return this.syllabiService.findAll();
   }
 
-  @Get('course/:courseId')
-  @ApiOperation({ summary: 'Get syllabus by course ID' })
-  findByCourse(@Param('courseId') courseId: string) {
-    return this.syllabiService.findByCourseId(courseId);
-  }
-
   @Get(':id')
   @ApiOperation({ summary: 'Get syllabus by ID with weeks' })
   findOne(@Param('id') id: string) {
     return this.syllabiService.findById(id);
   }
 
+  @Get('course/:courseId')
+  @ApiOperation({ summary: 'Get syllabus by course ID' })
+  findByCourse(@Param('courseId') courseId: string) {
+    return this.syllabiService.findByCourseId(courseId);
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create a syllabus for own course (instructor only)' })
-  create(@Body() body: CreateSyllabusDto, @Request() req: any) {
-    return this.syllabiService.create(body, req.user.userId);
+  @ApiOperation({ summary: 'Create a syllabus (instructor only)' })
+  create(@Body() body: CreateSyllabusDto) {
+    return this.syllabiService.create(body);
   }
 
   @Post('course/:courseId/upload')
@@ -111,19 +110,18 @@ export class SyllabiController {
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Upload a syllabus document for own course (instructor only)',
+    summary: 'Upload a syllabus document for a course (instructor only)',
   })
   @UseInterceptors(FileInterceptor('file', syllabusUploadOptions))
   uploadDocument(
     @Param('courseId') courseId: string,
     @UploadedFile() file: Express.Multer.File | undefined,
-    @Request() req: any,
   ) {
     if (!file) {
       throw new BadRequestException('A syllabus document is required.');
     }
 
-    return this.syllabiService.uploadDocument(courseId, file, req.user.userId);
+    return this.syllabiService.uploadDocument(courseId, file);
   }
 
   @Put(':id')
@@ -131,14 +129,10 @@ export class SyllabiController {
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Update own syllabus (creates version snapshot + notifies students)',
+    summary: 'Update syllabus (creates version snapshot + notifies students)',
   })
-  update(
-    @Param('id') id: string,
-    @Body() body: UpdateSyllabusDto,
-    @Request() req: any,
-  ) {
-    return this.syllabiService.update(id, body, req.user.userId);
+  update(@Param('id') id: string, @Body() body: UpdateSyllabusDto) {
+    return this.syllabiService.update(id, body);
   }
 
   @Get(':id/versions')
@@ -146,6 +140,8 @@ export class SyllabiController {
   getVersions(@Param('id') id: string) {
     return this.syllabiService.getVersions(id);
   }
+
+  // --- Weeks ---
 
   @Get(':syllabusId/weeks')
   @ApiOperation({ summary: 'Get all weeks of a syllabus' })
@@ -157,48 +153,32 @@ export class SyllabiController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Add a week to own syllabus (instructor only)' })
+  @ApiOperation({ summary: 'Add a week to syllabus (instructor only)' })
   createWeek(
     @Param('syllabusId') syllabusId: string,
     @Body() body: CreateSyllabusWeekDto,
-    @Request() req: any,
   ) {
-    return this.syllabiService.createWeek(syllabusId, body, req.user.userId);
+    return this.syllabiService.createWeek(syllabusId, body);
   }
 
   @Put(':syllabusId/weeks/:weekId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update own syllabus week (instructor only)' })
+  @ApiOperation({ summary: 'Update a week (instructor only)' })
   updateWeek(
-    @Param('syllabusId') syllabusId: string,
     @Param('weekId') weekId: string,
     @Body() body: UpdateSyllabusWeekDto,
-    @Request() req: any,
   ) {
-    return this.syllabiService.updateWeek(
-      syllabusId,
-      weekId,
-      body,
-      req.user.userId,
-    );
+    return this.syllabiService.updateWeek(weekId, body);
   }
 
   @Delete(':syllabusId/weeks/:weekId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete own syllabus week (instructor only)' })
-  deleteWeek(
-    @Param('syllabusId') syllabusId: string,
-    @Param('weekId') weekId: string,
-    @Request() req: any,
-  ) {
-    return this.syllabiService.deleteWeek(
-      syllabusId,
-      weekId,
-      req.user.userId,
-    );
+  @ApiOperation({ summary: 'Delete a week (instructor only)' })
+  deleteWeek(@Param('weekId') weekId: string) {
+    return this.syllabiService.deleteWeek(weekId);
   }
 }

@@ -3,7 +3,8 @@
 import InstructorLayout from "@/components/InstructorLayout";
 import { useEffect, useMemo, useState } from "react";
 import {
-CalendarDays,
+  Bell,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   MessageSquare,
@@ -12,8 +13,6 @@ CalendarDays,
 import { courseService } from "@/services/course.service";
 import { deadlineService } from "@/services/deadline.service";
 import { announcementService } from "@/services/announcement.service";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 
 const addDays = (date: Date, amount: number) => {
   const copy = new Date(date);
@@ -159,7 +158,8 @@ export default function InstructorDashboardPage() {
         setDeadlines(safeData);
 
         const upcoming = safeData
-          .map((deadline) => new Date(deadline.dueDate))
+          .map((deadline) => (deadline.dueDate ? new Date(deadline.dueDate) : null))
+          .filter((date): date is Date => date !== null)
           .filter((date) => !Number.isNaN(date.getTime()))
           .sort((a, b) => a.getTime() - b.getTime())[0];
 
@@ -236,13 +236,24 @@ export default function InstructorDashboardPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-[rgb(109,156,245)]">
-                  Academic Week
+                  Academic Week: 8
                 </span>
               </div>
 
-              <NotificationBell />
+              <button
+                type="button"
+                className="relative rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+              >
+                <Bell className="h-5 w-5 text-slate-600" />
+                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
+              </button>
 
-              <SettingsButton href="/instructor/settings" />
+              <button
+                type="button"
+                className="rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+              >
+                <Settings className="h-5 w-5 text-slate-600" />
+              </button>
             </div>
           </div>
         </header>

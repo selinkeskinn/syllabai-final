@@ -60,37 +60,33 @@ export class CoursesController {
     return this.coursesService.findById(id);
   }
 
-   @Post()
-   @UseGuards(JwtAuthGuard, RolesGuard)
-   @Roles('INSTRUCTOR')
-   @ApiBearerAuth()
-   @ApiOperation({ summary: 'Create a new course (instructor only)' })
-   create(@Body() body: CreateCourseDto, @Request() req: any) {
-     return this.coursesService.create({
-       ...body,
-       instructorId: req.user.userId,
-     });
-   }
+  @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('INSTRUCTOR')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create a new course (instructor only)' })
+  create(@Body() body: CreateCourseDto, @Request() req: any) {
+    return this.coursesService.create({
+      ...body,
+      instructorId: req.user.userId,
+    });
+  }
 
-   @Patch(':id')
-   @UseGuards(JwtAuthGuard, RolesGuard)
-   @Roles('INSTRUCTOR')
-   @ApiBearerAuth()
-   @ApiOperation({ summary: 'Update own course (instructor only)' })
-   update(
-     @Param('id') id: string,
-     @Body() body: UpdateCourseDto,
-     @Request() req: any,
-   ) {
-     return this.coursesService.update(id, body, req.user.userId);
-   }
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('INSTRUCTOR')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update a course (instructor only)' })
+  update(@Param('id') id: string, @Body() body: UpdateCourseDto) {
+    return this.coursesService.update(id, body);
+  }
 
-   @Delete(':id')
-   @UseGuards(JwtAuthGuard, RolesGuard)
-   @Roles('INSTRUCTOR')
-   @ApiBearerAuth()
-   @ApiOperation({ summary: 'Delete own course (instructor only)' })
-   delete(@Param('id') id: string, @Request() req: any) {
-     return this.coursesService.delete(id, req.user.userId);
-   }
- }
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('INSTRUCTOR')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete a course (instructor only)' })
+  delete(@Param('id') id: string) {
+    return this.coursesService.delete(id);
+  }
+}

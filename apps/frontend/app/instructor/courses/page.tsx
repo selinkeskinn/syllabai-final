@@ -5,8 +5,6 @@ import Link from "next/link";
 import InstructorLayout from "@/components/InstructorLayout";
 import { courseService } from "@/services/course.service";
 import { Bell, Plus, Settings } from "lucide-react";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 
 const courseVisuals = [
   {
@@ -88,13 +86,24 @@ export default function InstructorCoursesPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-[rgb(109,156,245)]">
-                  Academic Week
+                  Academic Week: 8
                 </span>
               </div>
 
-              <NotificationBell />
+              <button
+                type="button"
+                className="relative rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+              >
+                <Bell className="h-5 w-5 text-slate-600" />
+                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
+              </button>
 
-              <SettingsButton href="/instructor/settings" />
+              <button
+                type="button"
+                className="rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+              >
+                <Settings className="h-5 w-5 text-slate-600" />
+              </button>
             </div>
           </div>
         </header>
@@ -104,7 +113,7 @@ export default function InstructorCoursesPage() {
             <h2 className="mb-2 text-2xl font-semibold text-slate-900">
               My Courses
             </h2>
-            <p className="text-sm text-slate-500">Current Semester</p>
+            <p className="text-sm text-slate-500">Spring 2026 Semester</p>
           </div>
 
           {loading ? (

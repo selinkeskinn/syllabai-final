@@ -5,10 +5,9 @@ import Link from "next/link";
 import Layout from "@/components/Layout";
 import { announcementService, Announcement } from "@/services/announcement.service";
 import { Deadline, deadlineService } from "@/services/deadline.service";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 import {
-CalendarDays,
+  Bell,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Settings,
@@ -28,11 +27,11 @@ const formatDeadlineType = (type?: string | null) => {
 };
 
 const getCourseCode = (deadline: Deadline) => {
-  return deadline.course?.code || "Course";
+  return deadline.course?.code || "IE 492";
 };
 
 const getAnnouncementCourseCode = (announcement: Announcement) => {
-  return announcement.course?.code || "Course";
+  return announcement.course?.code || "IE 492";
 };
 
 const getAnnouncementPreview = (content?: string) => {
@@ -130,7 +129,7 @@ const getAnnouncementStyle = (type?: string | null) => {
 const buildWeekDays = (deadlines: Deadline[]) => {
   const validDates = deadlines
     .map((deadline) => (deadline.dueDate ? new Date(deadline.dueDate) : null))
-    .filter((date): date is Date => Boolean(date) && !Number.isNaN(date.getTime()));
+    .filter((date): date is Date => date !== null && !Number.isNaN(date.getTime()));
 
   const start = validDates.length > 0 ? new Date(validDates[0]) : new Date();
   start.setHours(0, 0, 0, 0);
@@ -215,13 +214,18 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3">
               <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-blue-500">
-                  Academic Week
+                  Academic Week: 8
                 </span>
               </div>
 
-              <NotificationBell />
+              <button className="relative rounded-lg p-2.5 transition hover:bg-slate-100" type="button">
+                <Bell className="h-5 w-5 text-slate-600" />
+                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
+              </button>
 
-              <SettingsButton href="/settings" />
+              <button className="rounded-lg p-2.5 transition hover:bg-slate-100" type="button">
+                <Settings className="h-5 w-5 text-slate-600" />
+              </button>
             </div>
           </div>
         </header>

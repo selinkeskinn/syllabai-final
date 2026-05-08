@@ -26,16 +26,12 @@ export class DeadlinesController {
   constructor(private readonly deadlinesService: DeadlinesService) {}
 
   @Get()
-  @ApiOperation({
-    summary:
-      'Get deadlines (role-aware: student sees enrolled, instructor sees own courses)',
-  })
+  @ApiOperation({ summary: 'Get deadlines (role-aware: student sees enrolled, instructor sees own courses)' })
   @ApiQuery({ name: 'courseId', required: false })
   findAll(@Request() req: any, @Query('courseId') courseId?: string) {
     if (req.user.role === 'INSTRUCTOR') {
       return this.deadlinesService.findForInstructor(req.user.userId, courseId);
     }
-
     return this.deadlinesService.findForStudent(req.user.userId, courseId);
   }
 
@@ -48,28 +44,24 @@ export class DeadlinesController {
   @Post()
   @UseGuards(RolesGuard)
   @Roles('INSTRUCTOR')
-  @ApiOperation({ summary: 'Create a deadline for own course (instructor only)' })
-  create(@Body() body: CreateDeadlineDto, @Request() req: any) {
-    return this.deadlinesService.create(body, req.user.userId);
+  @ApiOperation({ summary: 'Create a deadline (instructor only)' })
+  create(@Body() body: CreateDeadlineDto) {
+    return this.deadlinesService.create(body);
   }
 
   @Put(':id')
   @UseGuards(RolesGuard)
   @Roles('INSTRUCTOR')
-  @ApiOperation({ summary: 'Update own course deadline (instructor only)' })
-  update(
-    @Param('id') id: string,
-    @Body() body: UpdateDeadlineDto,
-    @Request() req: any,
-  ) {
-    return this.deadlinesService.update(id, body, req.user.userId);
+  @ApiOperation({ summary: 'Update a deadline (instructor only)' })
+  update(@Param('id') id: string, @Body() body: UpdateDeadlineDto) {
+    return this.deadlinesService.update(id, body);
   }
 
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles('INSTRUCTOR')
-  @ApiOperation({ summary: 'Delete own course deadline (instructor only)' })
-  delete(@Param('id') id: string, @Request() req: any) {
-    return this.deadlinesService.delete(id, req.user.userId);
+  @ApiOperation({ summary: 'Delete a deadline (instructor only)' })
+  delete(@Param('id') id: string) {
+    return this.deadlinesService.delete(id);
   }
 }

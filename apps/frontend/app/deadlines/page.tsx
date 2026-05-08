@@ -4,8 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Layout from "@/components/Layout";
 import { Bell, ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import { Deadline, deadlineService } from "@/services/deadline.service";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 
 const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -37,7 +35,7 @@ const formatTime = (value?: string | null) => {
 const getCourseLabel = (deadline: Deadline) => {
   if (deadline.course?.code) return deadline.course.code;
   if (deadline.course?.title) return deadline.course.title;
-  return "Course";
+  return "IE 492";
 };
 
 const getDotColor = (type?: string | null) => {
@@ -199,13 +197,24 @@ export default function DeadlinesPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-blue-500">
-                  Academic Week
+                  Academic Week: 8
                 </span>
               </div>
 
-              <NotificationBell />
+              <button
+                className="relative rounded-lg p-2.5 transition hover:bg-slate-100"
+                type="button"
+              >
+                <Bell className="h-5 w-5 text-slate-600" />
+                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
+              </button>
 
-              <SettingsButton href="/settings" />
+              <button
+                className="rounded-lg p-2.5 transition hover:bg-slate-100"
+                type="button"
+              >
+                <Settings className="h-5 w-5 text-slate-600" />
+              </button>
             </div>
           </div>
         </header>

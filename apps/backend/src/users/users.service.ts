@@ -13,7 +13,7 @@ import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   findAll() {
     return this.prisma.user.findMany({
@@ -185,41 +185,41 @@ export class UsersService {
       select: this.notificationPreferencesSelect(),
     });
   }
-    async updateAvatar(id: string, avatarUrl: string) {
-      await this.findById(id);
+  async updateAvatar(id: string, avatarUrl: string) {
+    await this.findById(id);
 
-      return this.prisma.user.update({
-        where: { id },
-        data: { avatarUrl },
-        select: this.userSelect(),
-      });
-    }
+    return this.prisma.user.update({
+      where: { id },
+      data: { avatarUrl },
+      select: this.userSelect(),
+    });
+  }
 
-    async removeAvatar(id: string) {
-      await this.findById(id);
+  async removeAvatar(id: string) {
+    await this.findById(id);
 
-      return this.prisma.user.update({
-        where: { id },
-        data: { avatarUrl: null },
-        select: this.userSelect(),
-      });
-    }
+    return this.prisma.user.update({
+      where: { id },
+      data: { avatarUrl: null },
+      select: this.userSelect(),
+    });
+  }
 
-    async deactivate(id: string) {
-      await this.findById(id);
+  async deactivate(id: string) {
+    await this.findById(id);
 
-      await this.prisma.user.update({
-        where: { id },
-        data: {
-          isActive: false,
-          deactivatedAt: new Date(),
-        },
-      });
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        isActive: false,
+        deactivatedAt: new Date(),
+      },
+    });
 
-      return {
-        message: 'Account deactivated successfully',
-      };
-    }
+    return {
+      message: 'Account deactivated successfully',
+    };
+  }
   async create(email: string, name: string, password: string, role: string) {
     const normalizedEmail = email.trim().toLowerCase();
 

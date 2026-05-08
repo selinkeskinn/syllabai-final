@@ -4,14 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import InstructorLayout from "@/components/InstructorLayout";
 import { Deadline, deadlineService } from "@/services/deadline.service";
 import { courseService } from "@/services/course.service";
-import NotificationBell from "@/components/NotificationBell";
-import SettingsButton from "@/components/SettingsButton";
 import {
-CalendarDays,
+  Bell,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Settings,
-  Trash2,
 } from "lucide-react";
 
 const formatDeadlineType = (type?: string | null) => {
@@ -98,7 +96,6 @@ export default function InstructorDeadlinesPage() {
   const [currentMonth, setCurrentMonth] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
-  const [actionMessage, setActionMessage] = useState("");
 
   useEffect(() => {
     const fetchDeadlines = async () => {
@@ -184,26 +181,6 @@ export default function InstructorDeadlinesPage() {
     );
   };
 
-  const handleDeleteDeadline = async (deadline: Deadline) => {
-    const confirmed = window.confirm(
-      `Delete "${deadline.title}"? This action cannot be undone.`
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setActionMessage("");
-      await deadlineService.deleteDeadline(deadline.id);
-      setDeadlines((current) =>
-        current.filter((item) => item.id !== deadline.id)
-      );
-      setActionMessage("Deadline deleted successfully.");
-    } catch (error) {
-      console.error("Deadline delete error:", error);
-      setActionMessage("Deadline could not be deleted.");
-    }
-  };
-
   return (
     <InstructorLayout>
       <div className="min-h-screen bg-slate-50">
@@ -216,13 +193,24 @@ export default function InstructorDeadlinesPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-[rgb(109,156,245)]">
-                  Academic Week
+                  Academic Week: 8
                 </span>
               </div>
 
-              <NotificationBell />
+              <button
+                type="button"
+                className="relative rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+              >
+                <Bell className="h-5 w-5 text-slate-600" />
+                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
+              </button>
 
-              <SettingsButton href="/instructor/settings" />
+              <button
+                type="button"
+                className="rounded-lg p-2.5 transition-colors hover:bg-slate-100"
+              >
+                <Settings className="h-5 w-5 text-slate-600" />
+              </button>
             </div>
           </div>
         </header>
@@ -234,12 +222,6 @@ export default function InstructorDeadlinesPage() {
               your courses.
             </p>
           </div>
-
-          {actionMessage ? (
-            <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700">
-              {actionMessage}
-            </div>
-          ) : null}
 
           {loading ? (
             <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">
@@ -367,20 +349,9 @@ export default function InstructorDeadlinesPage() {
                               </h3>
                             </div>
 
-                            <div className="flex flex-col items-end gap-2">
-                              <span className="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
-                                {formatTime(deadline.dueDate)}
-                              </span>
-
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteDeadline(deadline)}
-                                className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-100"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                Delete
-                              </button>
-                            </div>
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
+                              {formatTime(deadline.dueDate)}
+                            </span>
                           </div>
 
                           <div className="mb-3">
@@ -443,20 +414,9 @@ export default function InstructorDeadlinesPage() {
                             </p>
                           </div>
 
-                          <div className="flex flex-col items-end gap-2">
-                            <span className="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-500">
-                              {formatTime(deadline.dueDate)}
-                            </span>
-
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteDeadline(deadline)}
-                              className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-100"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Delete
-                            </button>
-                          </div>
+                          <span className="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-500">
+                            {formatTime(deadline.dueDate)}
+                          </span>
                         </div>
                       </article>
                     ))}
