@@ -11,6 +11,7 @@ import { DeadlinesModule } from './deadlines/deadlines.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { AnnouncementsModule } from "./announcements/announcements.module";
 
+import { AiModule } from './ai/ai.module';
 @Module({
   imports: [
     AuthModule,
@@ -22,6 +23,7 @@ import { AnnouncementsModule } from "./announcements/announcements.module";
     DeadlinesModule,
     FeedbackModule,
     AnnouncementsModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],
