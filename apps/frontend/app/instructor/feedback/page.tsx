@@ -6,8 +6,7 @@ import { FeedbackItem, getFeedback } from "@/services/feedback.service";
 import NotificationBell from "@/components/NotificationBell";
 import SettingsButton from "@/components/SettingsButton";
 import {
-  Bell,
-  Binary,
+Binary,
   Brain,
   Database,
   Globe,
@@ -114,14 +113,15 @@ function formatDate(value?: string) {
 
 function getStudentName(item: FeedbackItem, index: number) {
   const extended = item as FeedbackItem & {
-    anonymous?: boolean;
     user?: {
       name?: string | null;
       email?: string | null;
     } | null;
   };
 
-  if (extended.anonymous) return "Anonymous Student";
+  if (item.userId === null) {
+    return "Anonymous Feedback";
+  }
 
   return (
     extended.user?.name ||
@@ -131,7 +131,7 @@ function getStudentName(item: FeedbackItem, index: number) {
 }
 
 function getInitials(name: string) {
-  if (name === "Anonymous Student") return "?";
+  if (name === "Anonymous Feedback") return "AN";
 
   const initials = name
     .split(" ")
@@ -200,7 +200,7 @@ export default function InstructorFeedbackPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-blue-500">
-                  Academic Week: 8
+                  Academic Week
                 </span>
               </div>
 
