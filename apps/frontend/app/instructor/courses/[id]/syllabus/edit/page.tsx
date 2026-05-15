@@ -1,103 +1,181 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import InstructorLayout from "@/components/InstructorLayout";
-import { syllabusService } from "@/services/syllabus.service";
-import { X } from "lucide-react";
+import { aiService, CourseAiResource } from "@/services/ai.service";
+import {
+  AlertCircle,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  Trash2,
+  UploadCloud,
+  X,
+  XCircle,
+} from "lucide-react";
 
-type SyllabusFormState = {
-  title: string;
-  description: string;
-  grading: string;
-  policies: string;
-  resources: string;
+const getApiErrorMessage = (error: unknown, fallback: string) => {
+  if (
+    error &&
+    typeof error === "object" &&
+    "response" in error &&
+    (error as { response?: { data?: { message?: unknown } } }).response?.data
+      ?.message
+  ) {
+    const message = (error as { response: { data: { message: unknown } } })
+      .response.data.message;
+    if (typeof message === "string") return message;
+  }
+
+  return fallback;
 };
 
-const emptyForm: SyllabusFormState = {
-  title: "",
-  description: "",
-  grading: "",
-  policies: "",
-  resources: "",
+const getStatusClass = (status: CourseAiResource["status"]) => {
+  if (status === "READY") return "bg-emerald-100 text-emerald-700";
+  if (status === "FAILED") return "bg-red-100 text-red-700";
+  return "bg-amber-100 text-amber-700";
 };
 
-export default function EditSyllabusPage() {
+export default function ManageSyllabusDocumentsPage() {
   const params = useParams();
   const router = useRouter();
   const courseId = params.id as string;
 
-  const [formData, setFormData] = useState<SyllabusFormState>(emptyForm);
-  const [syllabusId, setSyllabusId] = useState<string | null>(null);
-  const [loadingInitial, setLoadingInitial] = useState(true);
-  const [loadingSubmit, setLoadingSubmit] = useState(false);
+  const [resources, setResources] = useState<CourseAiResource[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [loadingResources, setLoadingResources] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [deletingResourceIds, setDeletingResourceIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-
-  useEffect(() => {
-    const fetchSyllabus = async () => {
-      try {
-        const syllabus = await syllabusService.getSyllabusByCourseId(courseId);
-
-        if (!syllabus) {
-          setSyllabusId(null);
-          setFormData(emptyForm);
-          return;
-        }
-
-        setSyllabusId(syllabus.id);
-        setFormData({
-          title: syllabus.title || "",
-          description: syllabus.description || "",
-          grading: syllabus.grading || "",
-          policies: syllabus.policies || "",
-          resources: syllabus.resources || "",
-        });
-      } catch {
-        setSyllabusId(null);
-        setFormData(emptyForm);
-      } finally {
-        setLoadingInitial(false);
-      }
-    };
-
-    fetchSyllabus();
-  }, [courseId]);
 
   const handleClose = () => {
     router.push(`/instructor/courses/${courseId}`);
   };
 
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) => {
+  useEffect(() => {
+    const fetchResources = async () => {
+      try {
+        const data = await aiService.getCourseResources(courseId);
+        setResources(data);
+      } catch {
+        setResources([]);
+      } finally {
+        setLoadingResources(false);
+      }
+    };
+
+    fetchResources();
+  }, [courseId]);
+
+  useEffect(() => {
+    if (!resources.some((resource) => resource.status === "PROCESSING")) return;
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const data = await aiService.getCourseResources(courseId);
+        setResources(data);
+      } catch {
+        window.clearInterval(intervalId);
+      }
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [courseId, resources]);
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     setErrorMessage("");
-    setFormData((prev) => ({
-      ...prev,
-      [e.target.name]: e.target.value,
-    }));
+    setMessage("");
+    const file = event.target.files?.[0] ?? null;
+
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
+
+    const isPdf =
+      file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      event.target.value = "";
+      setSelectedFile(null);
+      setErrorMessage("Only PDF files can be indexed for course AI.");
+      return;
+    }
+
+    setSelectedFile(file);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedFile) {
+      setErrorMessage("Please choose a PDF file first.");
+      return;
+    }
 
     try {
-      setLoadingSubmit(true);
+      setUploading(true);
       setErrorMessage("");
+      setMessage("");
 
-      if (syllabusId) {
-        await syllabusService.updateSyllabus(syllabusId, formData);
-      } else {
-        await syllabusService.createSyllabus({
-          courseId,
-          ...formData,
-        });
-      }
+      const uploadedResource = await aiService.uploadCourseResource(
+        courseId,
+        selectedFile
+      );
 
-      router.push(`/instructor/courses/${courseId}`);
-    } catch {
-      setErrorMessage("Syllabus details could not be saved.");
+      setResources((current) => [
+        uploadedResource,
+        ...current.filter(
+          (resource) => resource.resourceId !== uploadedResource.resourceId
+        ),
+      ]);
+      setSelectedFile(null);
+      event.currentTarget.reset();
+      setMessage("Document uploaded. AI indexing is running.");
+    } catch (error) {
+      setErrorMessage(
+        getApiErrorMessage(error, "Document could not be uploaded.")
+      );
     } finally {
-      setLoadingSubmit(false);
+      setUploading(false);
+    }
+  };
+
+  const handleDeleteResource = async (resource: CourseAiResource) => {
+    if (resource.status === "PROCESSING") return;
+
+    const confirmed = window.confirm(
+      `Delete "${resource.resourceName}" and remove it from AI search?`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingResourceIds((current) =>
+      new Set(current).add(resource.resourceId)
+    );
+    setErrorMessage("");
+    setMessage("");
+
+    try {
+      await aiService.deleteCourseResource(courseId, resource.resourceId);
+      setResources((current) =>
+        current.filter((item) => item.resourceId !== resource.resourceId)
+      );
+      setMessage("Document deleted.");
+    } catch (error) {
+      setErrorMessage(
+        getApiErrorMessage(error, "Document could not be deleted.")
+      );
+    } finally {
+      setDeletingResourceIds((current) => {
+        const next = new Set(current);
+        next.delete(resource.resourceId);
+        return next;
+      });
     }
   };
 
@@ -105,11 +183,16 @@ export default function EditSyllabusPage() {
     <InstructorLayout>
       <div className="min-h-screen bg-slate-50">
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20">
-          <div className="mx-4 max-h-[calc(100vh-32px)] w-full max-w-md overflow-y-auto rounded-xl bg-white shadow-xl">
+          <div className="mx-4 w-full max-w-lg rounded-xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 p-6">
-              <h3 className="text-lg font-semibold text-slate-900">
-                {syllabusId ? "Edit Syllabus Details" : "Create Syllabus"}
-              </h3>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">
+                  Manage AI Documents
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Syllabus details are answered from uploaded PDFs.
+                </p>
+              </div>
 
               <button
                 type="button"
@@ -120,132 +203,142 @@ export default function EditSyllabusPage() {
               </button>
             </div>
 
-            {loadingInitial ? (
-              <div className="p-6 text-sm text-slate-500">
-                Loading syllabus details...
-              </div>
-            ) : (
-              <form onSubmit={handleSubmit} className="space-y-5 p-6">
-                <div>
-                  <label
-                    htmlFor="syllabus-title"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Syllabus Title
-                  </label>
-                  <input
-                    id="syllabus-title"
-                    type="text"
-                    name="title"
-                    required
-                    value={formData.title}
-                    onChange={handleChange}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder="Official syllabus title"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="syllabus-description"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Description
-                  </label>
-                  <textarea
-                    id="syllabus-description"
-                    name="description"
-                    rows={3}
-                    value={formData.description}
-                    onChange={handleChange}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder="Course overview and learning goals"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="syllabus-grading"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Grading
-                  </label>
-                  <textarea
-                    id="syllabus-grading"
-                    name="grading"
-                    rows={3}
-                    value={formData.grading}
-                    onChange={handleChange}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder={"Midterm: 30%\nProject: 30%\nFinal: 40%"}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="syllabus-policies"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Policies
-                  </label>
-                  <textarea
-                    id="syllabus-policies"
-                    name="policies"
-                    rows={3}
-                    value={formData.policies}
-                    onChange={handleChange}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder="Attendance, submission, and communication rules"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="syllabus-resources"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Resources
-                  </label>
-                  <textarea
-                    id="syllabus-resources"
-                    name="resources"
-                    rows={3}
-                    value={formData.resources}
-                    onChange={handleChange}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder={"Textbook: Database System Concepts\nSlides: Weekly lecture slides"}
-                  />
-                </div>
-
-                {errorMessage ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
-                    {errorMessage}
+            <form onSubmit={handleSubmit} className="space-y-5 p-6">
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
+                    <UploadCloud className="h-5 w-5" />
                   </div>
-                ) : null}
-
-                <div className="flex gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleClose}
-                    className="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={loadingSubmit}
-                    className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {loadingSubmit
-                      ? "Saving..."
-                      : syllabusId
-                      ? "Save Changes"
-                      : "Create"}
-                  </button>
+                  <div className="min-w-0 flex-1">
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      disabled={uploading}
+                      onChange={handleFileChange}
+                      className="w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <p className="mt-2 truncate text-xs text-slate-500">
+                      {selectedFile
+                        ? selectedFile.name
+                        : "Upload a text-based syllabus PDF."}
+                    </p>
+                  </div>
                 </div>
-              </form>
-            )}
+              </div>
+
+              {message ? (
+                <div className="flex items-start gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{message}</span>
+                </div>
+              ) : null}
+
+              {errorMessage ? (
+                <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{errorMessage}</span>
+                </div>
+              ) : null}
+
+              <div className="rounded-lg border border-slate-200">
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Uploaded PDFs
+                </div>
+                {loadingResources ? (
+                  <div className="flex items-center gap-2 px-4 py-5 text-sm text-slate-500">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading documents...
+                  </div>
+                ) : resources.length === 0 ? (
+                  <div className="px-4 py-5 text-sm text-slate-500">
+                    No AI documents uploaded yet.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-200">
+                    {resources.map((resource) => (
+                      <div
+                        key={resource.resourceId}
+                        className="flex items-start justify-between gap-3 px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 shrink-0 text-red-500" />
+                            <p className="truncate text-sm font-medium text-slate-900">
+                              {resource.resourceName}
+                            </p>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {resource.chunkCount} chunks
+                          </p>
+                          {resource.errorMessage ? (
+                            <p className="mt-1 line-clamp-2 text-xs text-red-600">
+                              {resource.errorMessage}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(
+                              resource.status
+                            )}`}
+                          >
+                            {resource.status === "READY" ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            ) : resource.status === "FAILED" ? (
+                              <XCircle className="h-3.5 w-3.5" />
+                            ) : (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            )}
+                            {resource.status}
+                          </span>
+
+                          <button
+                            type="button"
+                            disabled={
+                              resource.status === "PROCESSING" ||
+                              deletingResourceIds.has(resource.resourceId)
+                            }
+                            onClick={() => void handleDeleteResource(resource)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300 disabled:hover:bg-transparent"
+                            title={
+                              resource.status === "PROCESSING"
+                                ? "Wait until indexing finishes before deleting"
+                                : "Delete PDF"
+                            }
+                            aria-label={`Delete ${resource.resourceName}`}
+                          >
+                            {deletingResourceIds.has(resource.resourceId) ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                >
+                  Close
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={!selectedFile || uploading}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {uploading ? "Uploading..." : "Upload PDF"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       </div>

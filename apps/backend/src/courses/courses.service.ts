@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCourseDto } from './create-course.dto';
@@ -149,16 +155,28 @@ export class CoursesService {
     });
   }
 
-  async update(id: string, dto: UpdateCourseDto) {
-    await this.findById(id);
+  async update(id: string, dto: UpdateCourseDto, instructorId: string) {
+    const course = await this.findById(id);
+    this.assertCourseOwner(course.instructorId, instructorId);
+
     return this.prisma.course.update({
       where: { id },
       data: dto,
     });
   }
 
-  async delete(id: string) {
-    await this.findById(id);
+  async delete(id: string, instructorId: string) {
+    const course = await this.findById(id);
+    this.assertCourseOwner(course.instructorId, instructorId);
+
     return this.prisma.course.delete({ where: { id } });
+  }
+
+  private assertCourseOwner(ownerId: string, instructorId: string) {
+    if (ownerId !== instructorId) {
+      throw new ForbiddenException(
+        'You can only manage your own courses',
+      );
+    }
   }
 }

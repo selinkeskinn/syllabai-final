@@ -1,10 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { type ChangeEvent, type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import InstructorLayout from "@/components/InstructorLayout";
 import { courseService } from "@/services/course.service";
-import { X } from "lucide-react";
+import { FileText, Loader2, UploadCloud, X } from "lucide-react";
+
+const getApiErrorMessage = (error: unknown) => {
+  if (
+    error &&
+    typeof error === "object" &&
+    "response" in error &&
+    (error as { response?: { data?: { message?: unknown; error?: unknown } } })
+      .response?.data
+  ) {
+    const data = (
+      error as { response: { data: { message?: unknown; error?: unknown } } }
+    ).response.data;
+    const message = data.message ?? data.error;
+
+    if (Array.isArray(message)) return message.join(", ");
+    if (typeof message === "string") return message;
+  }
+
+  return "Course could not be created. Please try again.";
+};
 
 export default function NewCoursePage() {
   const router = useRouter();
@@ -18,9 +38,10 @@ export default function NewCoursePage() {
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
   ) => {
     setErrorMessage("");
     setFormData((prev) => ({
@@ -33,23 +54,43 @@ export default function NewCoursePage() {
     router.push("/instructor/courses");
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setErrorMessage("");
+    const file = event.target.files?.[0] ?? null;
+
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
+
+    const isPdf =
+      file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      setSelectedFile(null);
+      setErrorMessage("Only PDF files can be attached to a course.");
+      event.target.value = "";
+      return;
+    }
+
+    setSelectedFile(file);
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
     try {
       setLoading(true);
       setErrorMessage("");
 
-      await courseService.createCourse(formData);
+      const course = await courseService.createCourse({
+        ...formData,
+        file: selectedFile,
+      });
 
-      router.push("/instructor/courses");
-    } catch (error: any) {
-      const message =
-        error?.response?.data?.message ||
-        error?.response?.data?.error ||
-        "Course could not be created. Please try again.";
-
-      setErrorMessage(Array.isArray(message) ? message.join(", ") : message);
+      router.push(`/instructor/courses/${course.id}`);
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -59,7 +100,7 @@ export default function NewCoursePage() {
     <InstructorLayout>
       <div className="min-h-screen bg-slate-50">
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20">
-          <div className="mx-4 w-full max-w-md rounded-xl bg-white shadow-xl">
+          <div className="mx-4 w-full max-w-lg rounded-xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 p-6">
               <h3 className="text-lg font-semibold text-slate-900">
                 Create Course
@@ -151,6 +192,45 @@ export default function NewCoursePage() {
                 />
               </div>
 
+              <div>
+                <label
+                  htmlFor="course-document"
+                  className="mb-2 block text-sm font-medium text-slate-700"
+                >
+                  Syllabus PDF
+                </label>
+                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
+                      {selectedFile ? (
+                        <FileText className="h-5 w-5" />
+                      ) : (
+                        <UploadCloud className="h-5 w-5" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <input
+                        id="course-document"
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        disabled={loading}
+                        onChange={handleFileChange}
+                        className="w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      {selectedFile ? (
+                        <p className="mt-2 truncate text-xs text-slate-500">
+                          {selectedFile.name}
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Optional. The AI index starts after creation.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {errorMessage ? (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
                   {errorMessage}
@@ -169,8 +249,9 @@ export default function NewCoursePage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   {loading ? "Creating..." : "Create Course"}
                 </button>
               </div>

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -10,10 +11,12 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DeadlinesModule } from './deadlines/deadlines.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { AnnouncementsModule } from "./announcements/announcements.module";
+import { ResourcesModule } from './resources/resources.module';
 
 import { AiModule } from './ai/ai.module';
 @Module({
   imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
     AuthModule,
     UsersModule,
     CoursesModule,
@@ -24,6 +27,7 @@ import { AiModule } from './ai/ai.module';
     FeedbackModule,
     AnnouncementsModule,
     AiModule,
+    ResourcesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

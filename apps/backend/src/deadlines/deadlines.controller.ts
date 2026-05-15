@@ -45,23 +45,27 @@ export class DeadlinesController {
   @UseGuards(RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiOperation({ summary: 'Create a deadline (instructor only)' })
-  create(@Body() body: CreateDeadlineDto) {
-    return this.deadlinesService.create(body);
+  create(@Body() body: CreateDeadlineDto, @Request() req: any) {
+    return this.deadlinesService.create(body, req.user.userId);
   }
 
   @Put(':id')
   @UseGuards(RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiOperation({ summary: 'Update a deadline (instructor only)' })
-  update(@Param('id') id: string, @Body() body: UpdateDeadlineDto) {
-    return this.deadlinesService.update(id, body);
+  update(
+    @Param('id') id: string,
+    @Body() body: UpdateDeadlineDto,
+    @Request() req: any,
+  ) {
+    return this.deadlinesService.update(id, body, req.user.userId);
   }
 
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiOperation({ summary: 'Delete a deadline (instructor only)' })
-  delete(@Param('id') id: string) {
-    return this.deadlinesService.delete(id);
+  delete(@Param('id') id: string, @Request() req: any) {
+    return this.deadlinesService.delete(id, req.user.userId);
   }
 }

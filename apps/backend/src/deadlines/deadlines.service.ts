@@ -73,7 +73,9 @@ export class DeadlinesService {
     return deadline;
   }
 
-  async create(dto: CreateDeadlineDto) {
+  async create(dto: CreateDeadlineDto, instructorId: string) {
+    await this.ensureCourseOwner(dto.courseId, instructorId);
+
     return this.prisma.deadline.create({
       data: {
         courseId: dto.courseId,
@@ -90,8 +92,10 @@ export class DeadlinesService {
     });
   }
 
-  async update(id: string, dto: UpdateDeadlineDto) {
-    await this.findById(id);
+  async update(id: string, dto: UpdateDeadlineDto, instructorId: string) {
+    const deadline = await this.findById(id);
+    this.assertCourseOwner(deadline.course.instructorId, instructorId);
+
     const data: any = { ...dto };
     if (dto.dueDate) data.dueDate = new Date(dto.dueDate);
     return this.prisma.deadline.update({
@@ -105,8 +109,31 @@ export class DeadlinesService {
     });
   }
 
-  async delete(id: string) {
-    await this.findById(id);
+  async delete(id: string, instructorId: string) {
+    const deadline = await this.findById(id);
+    this.assertCourseOwner(deadline.course.instructorId, instructorId);
+
     return this.prisma.deadline.delete({ where: { id } });
+  }
+
+  private async ensureCourseOwner(courseId: string, instructorId: string) {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { instructorId: true },
+    });
+
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
+
+    this.assertCourseOwner(course.instructorId, instructorId);
+  }
+
+  private assertCourseOwner(ownerId: string, instructorId: string) {
+    if (ownerId !== instructorId) {
+      throw new ForbiddenException(
+        'You can only manage deadlines for your own courses',
+      );
+    }
   }
 }
