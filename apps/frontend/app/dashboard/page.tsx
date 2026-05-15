@@ -5,6 +5,8 @@ import Link from "next/link";
 import Layout from "@/components/Layout";
 import { announcementService, Announcement } from "@/services/announcement.service";
 import { Deadline, deadlineService } from "@/services/deadline.service";
+import NotificationBell from "@/components/NotificationBell";
+import SettingsButton from "@/components/SettingsButton";
 import {
   Bell,
   CalendarDays,
@@ -218,14 +220,9 @@ export default function DashboardPage() {
                 </span>
               </div>
 
-              <button className="relative rounded-lg p-2.5 transition hover:bg-slate-100" type="button">
-                <Bell className="h-5 w-5 text-slate-600" />
-                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-              </button>
+              <NotificationBell />
 
-              <button className="rounded-lg p-2.5 transition hover:bg-slate-100" type="button">
-                <Settings className="h-5 w-5 text-slate-600" />
-              </button>
+              <SettingsButton href="/settings" />
             </div>
           </div>
         </header>
