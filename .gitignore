@@ -3,6 +3,11 @@ dist
 .idea
 .DS_Store
 coverage
+*.log
+*.err.log
+tmp-*/
+apps/frontend/.npm-cache/
+test-syllabus.*
 apps/backend/.env
 # Uploaded files
 apps/backend/uploads/

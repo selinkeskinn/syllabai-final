@@ -27,6 +27,12 @@ enum NotificationType {
   ENROLLMENT
 }
 
+enum ResourceStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -55,6 +61,7 @@ model User {
   enrollments   Enrollment[]
   notifications Notification[]
   feedbacks     Feedback[]
+  uploadedResources CourseResource[] @relation("UploadedResources")
 }
 
 model Course {
@@ -74,6 +81,7 @@ model Course {
   deadlines    Deadline[]
   feedbacks   Feedback[]
   announcements Announcement[]
+  resources    CourseResource[]
 }
 
 model Syllabus {
@@ -184,4 +192,42 @@ model Announcement {
   updatedAt DateTime @updatedAt
 
   course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+model CourseResource {
+  id           String         @id @default(uuid())
+  courseId     String
+  uploadedById String
+  originalName String
+  storedName   String
+  mimeType     String
+  sizeBytes    Int
+  status       ResourceStatus @default(PROCESSING)
+  errorMessage String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  course       Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  uploadedBy   User            @relation("UploadedResources", fields: [uploadedById], references: [id])
+  chunks       ResourceChunk[]
+
+  @@index([courseId])
+  @@index([status])
+}
+
+model ResourceChunk {
+  id          String         @id @default(uuid())
+  resourceId  String
+  courseId    String
+  pageNumber  Int?
+  chunkIndex  Int
+  content     String
+  embedding   Float[]
+  createdAt   DateTime       @default(now())
+
+  resource    CourseResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, chunkIndex])
+  @@index([courseId])
+  @@index([resourceId])
 }

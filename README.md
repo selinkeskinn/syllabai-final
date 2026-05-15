@@ -25,6 +25,10 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Project Docs
+
+- [Backend AI API Contract](docs/backend-ai-api-contract.md)
+
 ## Project setup
 
 ```bash

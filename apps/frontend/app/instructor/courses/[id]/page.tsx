@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import InstructorLayout from "@/components/InstructorLayout";
 import { courseService } from "@/services/course.service";
+import {
+  aiService,
+  CourseAiResource,
+  CourseAiSyllabusSummary,
+} from "@/services/ai.service";
 import {
   getSyllabusDescriptionText,
   getSyllabusDocumentMetadata,
@@ -14,22 +19,30 @@ import {
 import { api } from "@/lib/api";
 import {
   ArrowLeft,
+  AlertCircle,
   Bell,
+  Bot,
   Calendar,
+  CheckCircle2,
   ChevronDown,
-  Copy,
   Download,
   Edit2,
   FileText,
   KeyRound,
+  Loader2,
+  LucideIcon,
   MessageSquare,
   Plus,
   Search,
   Settings,
+  Trash2,
+  UploadCloud,
+  XCircle,
 } from "lucide-react";
 import {
   Cell,
   Legend,
+  LegendPayload,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -92,9 +105,32 @@ type ResourceFile = {
   type: string;
   size: string;
   uploadDate: string;
+  status: CourseAiResource["status"] | "LEGACY";
+  chunkCount: number;
+  errorMessage?: string | null;
+  isAiResource: boolean;
 };
 
-const tabs: { id: TabType; label: string; icon: any }[] = [
+type DisplayWeek = {
+  id: string;
+  weekNo: number;
+  topic: string;
+  details?: string | null;
+  todo?: string | null;
+};
+
+type GradingPieLabelProps = {
+  name?: string;
+  value?: number;
+};
+
+type GradingLegendPayload = LegendPayload & {
+  payload?: {
+    value?: number;
+  };
+};
+
+const tabs: { id: TabType; label: string; icon: LucideIcon }[] = [
   { id: "overview", label: "Overview", icon: FileText },
   { id: "instructor", label: "Instructor Info", icon: MessageSquare },
   { id: "courseInfo", label: "Course Info", icon: FileText },
@@ -254,6 +290,42 @@ const getFileType = (fileName?: string | null) => {
   return fileName.split(".").pop()?.toLowerCase() || "file";
 };
 
+const formatFileSize = (sizeBytes?: number | null) => {
+  if (!sizeBytes || sizeBytes <= 0) return "Unknown";
+  if (sizeBytes < 1024 * 1024) return `${Math.round(sizeBytes / 1024)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const getResourceStatusClass = (status: ResourceFile["status"]) => {
+  if (status === "READY") return "bg-emerald-100 text-emerald-700";
+  if (status === "PROCESSING") return "bg-amber-100 text-amber-700";
+  if (status === "FAILED") return "bg-red-100 text-red-700";
+  return "bg-slate-100 text-slate-600";
+};
+
+const getResourceStatusLabel = (status: ResourceFile["status"]) => {
+  if (status === "READY") return "Ready";
+  if (status === "PROCESSING") return "Processing";
+  if (status === "FAILED") return "Failed";
+  return "Document";
+};
+
+const getApiErrorMessage = (error: unknown, fallback: string) => {
+  if (
+    error &&
+    typeof error === "object" &&
+    "response" in error &&
+    (error as { response?: { data?: { message?: unknown } } }).response?.data
+      ?.message
+  ) {
+    const message = (error as { response: { data: { message: unknown } } })
+      .response.data.message;
+    if (typeof message === "string") return message;
+  }
+
+  return fallback;
+};
+
 const getWeekPlace = (weekNo: number) =>
   [3, 6, 9, 12].includes(weekNo) ? "Online" : "F2F";
 
@@ -356,6 +428,21 @@ export default function InstructorCourseDetailPage() {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("date");
+  const [aiResources, setAiResources] = useState<CourseAiResource[]>([]);
+  const [loadingAiResources, setLoadingAiResources] = useState(true);
+  const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(
+    null
+  );
+  const [uploadingResource, setUploadingResource] = useState(false);
+  const [resourceUploadError, setResourceUploadError] = useState("");
+  const [resourceUploadMessage, setResourceUploadMessage] = useState("");
+  const [deletingResourceIds, setDeletingResourceIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [aiSummary, setAiSummary] = useState<CourseAiSyllabusSummary | null>(
+    null
+  );
+  const [loadingAiSummary, setLoadingAiSummary] = useState(false);
 
   const handleCopyJoinKey = async () => {
     if (!course?.joinKey) return;
@@ -415,8 +502,63 @@ export default function InstructorCourseDetailPage() {
     fetchAnnouncements();
   }, [courseId]);
 
+  useEffect(() => {
+    const fetchAiResources = async () => {
+      try {
+        const data = await aiService.getCourseResources(courseId);
+        setAiResources(data);
+      } catch {
+        setAiResources([]);
+      } finally {
+        setLoadingAiResources(false);
+      }
+    };
+
+    fetchAiResources();
+  }, [courseId]);
+
+  useEffect(() => {
+    if (!aiResources.some((resource) => resource.status === "PROCESSING")) {
+      return;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const data = await aiService.getCourseResources(courseId);
+        setAiResources(data);
+      } catch {
+        window.clearInterval(intervalId);
+      }
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [aiResources, courseId]);
+
+  useEffect(() => {
+    const hasReadyResource = aiResources.some(
+      (resource) => resource.status === "READY"
+    );
+
+    if (!hasReadyResource) return;
+
+    const fetchAiSummary = async () => {
+      try {
+        setLoadingAiSummary(true);
+        const data = await aiService.getSyllabusSummary(courseId);
+        setAiSummary(data);
+      } catch {
+        setAiSummary(null);
+      } finally {
+        setLoadingAiSummary(false);
+      }
+    };
+
+    fetchAiSummary();
+  }, [aiResources, courseId]);
+
   const resolvedSyllabus = syllabus ?? course?.syllabus ?? null;
-  const syllabusDescription = getSyllabusDescriptionText(resolvedSyllabus);
+  const syllabusDescription =
+    aiSummary?.courseSummary || getSyllabusDescriptionText(resolvedSyllabus);
   const syllabusDocument = getSyllabusDocumentMetadata(resolvedSyllabus);
   const sortedDeadlines = [...(course?.deadlines || [])].sort((a, b) => {
     const first = a.dueDate ? new Date(a.dueDate).getTime() : 0;
@@ -426,22 +568,80 @@ export default function InstructorCourseDetailPage() {
 
   const visibleAnnouncements = announcements.slice(0, 2);
   const visibleDeadlines = sortedDeadlines.slice(0, 3);
-  const gradingRows = getLabeledRows(resolvedSyllabus?.grading);
+  const manualGradingRows = getLabeledRows(resolvedSyllabus?.grading);
+  const aiGradingRows =
+    aiSummary?.gradingItems.map((item, index) => ({
+      id: `${item.label || "grading"}-${index}`,
+      label: item.label || `Component ${index + 1}`,
+      value: [item.value, item.description].filter(Boolean).join(" - "),
+    })) ?? [];
+  const gradingRows =
+    manualGradingRows.length > 0 ? manualGradingRows : aiGradingRows;
   const gradingChartData = getGradingChartData(gradingRows);
+  const readyAiResources = aiResources.filter(
+    (resource) => resource.status === "READY"
+  );
+  const aiResourcesText =
+    aiSummary?.resources?.length ? aiSummary.resources.join("\n") : "";
+  const readyResourceNamesText = readyAiResources
+    .map((resource) => `Uploaded PDF: ${resource.resourceName}`)
+    .join("\n");
+  const displayedResourcesText =
+    resolvedSyllabus?.resources || aiResourcesText || readyResourceNamesText;
+  const aiPoliciesText =
+    aiSummary?.policies?.length ? aiSummary.policies.join("\n") : "";
+  const displayedWeeks: DisplayWeek[] = resolvedSyllabus?.weeks?.length
+    ? resolvedSyllabus.weeks.map((week) => ({
+        id: week.id,
+        weekNo: week.weekNo,
+        topic: week.topic,
+        details: week.details,
+        todo: week.todo,
+      }))
+    : (aiSummary?.weeklyTopics ?? []).map((week, index) => ({
+        id: `ai-week-${week.weekNo ?? index + 1}`,
+        weekNo: week.weekNo ?? index + 1,
+        topic: week.topic || "Topic from uploaded PDF",
+        details: week.details,
+        todo: week.todo,
+      }));
 
-  const resourceFiles: ResourceFile[] = syllabusDocument.fileName
-    ? [
-        {
-          id: "syllabus-document",
-          name: syllabusDocument.fileName,
-          type: getFileType(syllabusDocument.fileName),
-          size: "Uploaded file",
-          uploadDate: formatShortDate(
-            resolvedSyllabus?.documentUploadedAt || resolvedSyllabus?.updatedAt
-          ),
-        },
-      ]
-    : [];
+  const resourceFiles: ResourceFile[] = [
+    ...aiResources.map((resource) => ({
+      id: resource.resourceId,
+      name: resource.resourceName,
+      type: getFileType(resource.resourceName),
+      size: formatFileSize(resource.sizeBytes),
+      uploadDate: formatShortDate(resource.createdAt),
+      status: resource.status,
+      chunkCount: resource.chunkCount,
+      errorMessage: resource.errorMessage,
+      isAiResource: true,
+    })),
+    ...(syllabusDocument.fileName &&
+    !aiResources.some(
+      (resource) => resource.resourceName === syllabusDocument.fileName
+    )
+      ? [
+          {
+            id: "syllabus-document",
+            name: syllabusDocument.fileName,
+            type: getFileType(syllabusDocument.fileName),
+            size:
+              typeof syllabusDocument.sizeKb === "number"
+                ? `${syllabusDocument.sizeKb} KB`
+                : "Uploaded file",
+            uploadDate: formatShortDate(
+              resolvedSyllabus?.documentUploadedAt || resolvedSyllabus?.updatedAt
+            ),
+            status: "LEGACY" as const,
+            chunkCount: 0,
+            errorMessage: null,
+            isAiResource: false,
+          },
+        ]
+      : []),
+  ];
 
   const filteredResourceFiles = resourceFiles
     .filter((file) =>
@@ -480,6 +680,88 @@ export default function InstructorCourseDetailPage() {
     setSelectedFiles(new Set(filteredResourceFiles.map((file) => file.id)));
   };
 
+  const handleResourceUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedUploadFile) {
+      setResourceUploadError("Please choose a PDF file first.");
+      return;
+    }
+
+    const isPdf =
+      selectedUploadFile.type === "application/pdf" ||
+      selectedUploadFile.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      setResourceUploadError("Only PDF files can be indexed for AI.");
+      return;
+    }
+
+    setUploadingResource(true);
+    setResourceUploadError("");
+    setResourceUploadMessage("");
+
+    try {
+      const uploadedResource = await aiService.uploadCourseResource(
+        courseId,
+        selectedUploadFile
+      );
+      setAiResources((current) => [
+        uploadedResource,
+        ...current.filter(
+          (resource) => resource.resourceId !== uploadedResource.resourceId
+        ),
+      ]);
+      setSelectedUploadFile(null);
+      event.currentTarget.reset();
+      setResourceUploadMessage("Document uploaded. AI indexing is running.");
+    } catch (error) {
+      setResourceUploadError(
+        getApiErrorMessage(error, "Document could not be uploaded.")
+      );
+    } finally {
+      setUploadingResource(false);
+    }
+  };
+
+  const handleDeleteResource = async (file: ResourceFile) => {
+    if (!file.isAiResource || deletingResourceIds.has(file.id)) return;
+
+    const confirmed = window.confirm(
+      `Delete "${file.name}" and remove it from AI search?`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingResourceIds((current) => new Set(current).add(file.id));
+    setResourceUploadError("");
+    setResourceUploadMessage("");
+
+    try {
+      await aiService.deleteCourseResource(courseId, file.id);
+      setAiResources((current) =>
+        current.filter((resource) => resource.resourceId !== file.id)
+      );
+      setSelectedFiles((current) => {
+        const next = new Set(current);
+        next.delete(file.id);
+        return next;
+      });
+      setAiSummary(null);
+      setResourceUploadMessage("Document deleted.");
+    } catch (error) {
+      setResourceUploadError(
+        getApiErrorMessage(error, "Document could not be deleted.")
+      );
+    } finally {
+      setDeletingResourceIds((current) => {
+        const next = new Set(current);
+        next.delete(file.id);
+        return next;
+      });
+    }
+  };
+
   const policySections: Record<
     PolicyTab,
     {
@@ -491,8 +773,11 @@ export default function InstructorCourseDetailPage() {
   > = {
     communication: {
       title: "Communication Channels and Methods",
-      paragraphs: resolvedSyllabus?.policies
-        ? resolvedSyllabus.policies.split("\n").map((line) => line.trim()).filter(Boolean)
+      paragraphs: resolvedSyllabus?.policies || aiPoliciesText
+        ? (resolvedSyllabus?.policies || aiPoliciesText)
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
         : [
             "Please use the university mail address for official course communication.",
             "All official course announcements will be posted through the course portal.",
@@ -740,15 +1025,15 @@ export default function InstructorCourseDetailPage() {
 
               <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
                 <Link
-                  href={`/instructor/courses/${course.id}/syllabus/new`}
+                  href={`/instructor/courses/${course.id}/syllabus/edit`}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      Upload Syllabus
+                      Manage PDFs
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Add or replace official file
+                      Upload course documents
                     </p>
                   </div>
                   <FileText className="h-5 w-5 text-blue-600" />
@@ -760,25 +1045,25 @@ export default function InstructorCourseDetailPage() {
                 >
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      Edit Syllabus
+                      AI Syllabus
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Grading, policies, resources
+                      Ask grading and policies
                     </p>
                   </div>
-                  <Edit2 className="h-5 w-5 text-blue-600" />
+                  <Bot className="h-5 w-5 text-blue-600" />
                 </Link>
 
                 <Link
-                  href={`/instructor/courses/${course.id}/week/new`}
+                  href={`/instructor/courses/${course.id}/syllabus/edit`}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      Add Week
+                      Weekly Topics
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Add weekly course plan
+                      Retrieved from PDF
                     </p>
                   </div>
                   <Calendar className="h-5 w-5 text-blue-600" />
@@ -921,6 +1206,7 @@ export default function InstructorCourseDetailPage() {
                       </div>
                     )}
                   </section>
+
                 </div>
               )}
 
@@ -1191,21 +1477,21 @@ export default function InstructorCourseDetailPage() {
                     </div>
 
                     <Link
-                      href={`/instructor/courses/${course.id}/week/new`}
+                      href={`/instructor/courses/${course.id}/syllabus/edit`}
                       className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
                     >
-                      <Edit2 className="h-4 w-4" />
-                      <span className="text-sm font-medium">Edit</span>
+                      <FileText className="h-4 w-4" />
+                      <span className="text-sm font-medium">Manage PDFs</span>
                     </Link>
                   </div>
 
-                  {loadingSyllabus ? (
+                  {loadingSyllabus || loadingAiSummary ? (
                     <div className="p-8 text-sm text-slate-500">
                       Loading calendar...
                     </div>
-                  ) : !resolvedSyllabus?.weeks?.length ? (
+                  ) : displayedWeeks.length === 0 ? (
                     <div className="p-8 text-sm text-slate-500">
-                      No weekly plan has been added yet.
+                      Use the floating AI chat for weekly topics after the PDF is ready.
                     </div>
                   ) : (
                     <>
@@ -1228,7 +1514,7 @@ export default function InstructorCourseDetailPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {[...resolvedSyllabus.weeks]
+                            {[...displayedWeeks]
                               .sort((a, b) => a.weekNo - b.weekNo)
                               .map((week) => {
                                 const tone = getCalendarTone(
@@ -1316,6 +1602,60 @@ export default function InstructorCourseDetailPage() {
 
               {activeTab === "resources" && (
                 <div className="rounded-xl border border-slate-200 bg-white p-6">
+                  <div className="mb-6 flex flex-col gap-4 border-b border-slate-200 pb-6 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        AI Course Documents
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Upload syllabus PDFs for course-scoped AI answers.
+                      </p>
+                    </div>
+
+                    <form
+                      onSubmit={handleResourceUpload}
+                      className="flex flex-col gap-3 sm:flex-row sm:items-center"
+                    >
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        disabled={uploadingResource}
+                        onChange={(event) => {
+                          setSelectedUploadFile(event.target.files?.[0] ?? null);
+                          setResourceUploadError("");
+                          setResourceUploadMessage("");
+                        }}
+                        className="max-w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!selectedUploadFile || uploadingResource}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {uploadingResource ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <UploadCloud className="h-4 w-4" />
+                        )}
+                        <span>{uploadingResource ? "Indexing" : "Upload"}</span>
+                      </button>
+                    </form>
+                  </div>
+
+                  {resourceUploadError ? (
+                    <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{resourceUploadError}</span>
+                    </div>
+                  ) : null}
+
+                  {resourceUploadMessage ? (
+                    <div className="mb-4 flex items-start gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{resourceUploadMessage}</span>
+                    </div>
+                  ) : null}
+
                   <div className="mb-4">
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
@@ -1331,11 +1671,11 @@ export default function InstructorCourseDetailPage() {
 
                   <div className="mb-6 flex flex-wrap items-center gap-3">
                     <Link
-                      href={`/instructor/courses/${course.id}/syllabus/new`}
+                      href={`/instructor/courses/${course.id}/syllabus/edit`}
                       className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-600"
                     >
-                      <Plus className="h-4 w-4" />
-                      <span>Add Document</span>
+                      <UploadCloud className="h-4 w-4" />
+                      <span>Manage PDFs</span>
                     </Link>
 
                     <button
@@ -1376,18 +1716,29 @@ export default function InstructorCourseDetailPage() {
                         />
                       </div>
                       <div className="col-span-1" />
-                      <div className="col-span-5 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                      <div className="col-span-4 text-xs font-semibold uppercase tracking-wide text-slate-700">
                         File Name
                       </div>
                       <div className="col-span-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
                         Size
                       </div>
-                      <div className="col-span-3 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                      <div className="col-span-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                        AI Status
+                      </div>
+                      <div className="col-span-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
                         Upload Date
+                      </div>
+                      <div className="col-span-1 text-right text-xs font-semibold uppercase tracking-wide text-slate-700">
+                        Actions
                       </div>
                     </div>
 
-                    {filteredResourceFiles.length === 0 ? (
+                    {loadingAiResources ? (
+                      <div className="flex items-center gap-2 px-4 py-6 text-sm text-slate-500">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Loading documents...</span>
+                      </div>
+                    ) : filteredResourceFiles.length === 0 ? (
                       <div className="px-4 py-6 text-sm text-slate-500">
                         No uploaded documents found.
                       </div>
@@ -1415,7 +1766,7 @@ export default function InstructorCourseDetailPage() {
                               </div>
                             </div>
 
-                            <div className="col-span-5">
+                            <div className="col-span-4">
                               <div className="text-sm font-medium text-slate-900">
                                 {file.name}
                               </div>
@@ -1430,10 +1781,67 @@ export default function InstructorCourseDetailPage() {
                               </span>
                             </div>
 
-                            <div className="col-span-3">
+                            <div className="col-span-2">
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${getResourceStatusClass(
+                                  file.status
+                                )}`}
+                              >
+                                {file.status === "READY" ? (
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                ) : file.status === "FAILED" ? (
+                                  <XCircle className="h-3.5 w-3.5" />
+                                ) : file.status === "PROCESSING" ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <FileText className="h-3.5 w-3.5" />
+                                )}
+                                {getResourceStatusLabel(file.status)}
+                              </span>
+                              {file.status === "READY" ? (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {file.chunkCount} chunks
+                                </div>
+                              ) : null}
+                              {file.errorMessage ? (
+                                <div className="mt-1 line-clamp-2 text-xs text-red-600">
+                                  {file.errorMessage}
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="col-span-1">
                               <span className="text-sm text-slate-600">
                                 {file.uploadDate}
                               </span>
+                            </div>
+
+                            <div className="col-span-1 flex justify-end">
+                              <button
+                                type="button"
+                                disabled={
+                                  !file.isAiResource ||
+                                  file.status === "PROCESSING" ||
+                                  deletingResourceIds.has(file.id)
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleDeleteResource(file);
+                                }}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300 disabled:hover:bg-transparent"
+                                title={
+                                  file.status === "PROCESSING"
+                                    ? "Wait until indexing finishes before deleting"
+                                    : "Delete PDF"
+                                }
+                                aria-label={`Delete ${file.name}`}
+                              >
+                                {deletingResourceIds.has(file.id) ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -1460,7 +1868,9 @@ export default function InstructorCourseDetailPage() {
                       </Link>
                     </div>
 
-                    {renderMultilineText(resolvedSyllabus?.resources)}
+                    {loadingAiSummary
+                      ? renderMultilineText("Reading uploaded PDF resources...")
+                      : renderMultilineText(displayedResourcesText)}
                   </div>
                 </div>
               )}
@@ -1488,7 +1898,9 @@ export default function InstructorCourseDetailPage() {
 
                   {gradingRows.length === 0 ? (
                     <div className="p-8 text-sm text-slate-500">
-                      No grading information has been added yet.
+                      {loadingAiSummary
+                        ? "Reading grading policy from uploaded PDF..."
+                        : "No grading information was found in the uploaded PDFs yet."}
                     </div>
                   ) : (
                     <>
@@ -1501,9 +1913,13 @@ export default function InstructorCourseDetailPage() {
                                 cx="50%"
                                 cy="50%"
                                 labelLine={false}
-                                label={(props: any) =>
-                                  `${props.name}: ${props.value}%`
-                                }
+                                label={(props) => {
+                                  const labelProps =
+                                    props as GradingPieLabelProps;
+                                  return `${labelProps.name ?? ""}: ${
+                                    labelProps.value ?? 0
+                                  }%`;
+                                }}
                                 outerRadius={100}
                                 dataKey="value"
                               >
@@ -1515,9 +1931,13 @@ export default function InstructorCourseDetailPage() {
                               <Legend
                                 verticalAlign="bottom"
                                 height={36}
-                                formatter={(value, entry: any) =>
-                                  `${value} (${entry.payload.value}%)`
-                                }
+                                formatter={(value, entry) => {
+                                  const legendEntry =
+                                    entry as GradingLegendPayload;
+                                  return `${value} (${
+                                    legendEntry.payload?.value ?? 0
+                                  }%)`;
+                                }}
                               />
                             </PieChart>
                           </ResponsiveContainer>
@@ -1776,7 +2196,8 @@ export default function InstructorCourseDetailPage() {
                     </div>
 
                     <p className="leading-relaxed text-slate-700">
-                      {course.description ||
+                      {aiSummary?.courseSummary ||
+                        course.description ||
                         "This course contributes to the program by helping students build practical knowledge, follow structured academic resources, complete course deliverables, and connect weekly learning outcomes with program-level expectations."}
                     </p>
                   </div>

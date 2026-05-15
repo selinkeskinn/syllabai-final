@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import InstructorLayout from "@/components/InstructorLayout";
-import { syllabusService } from "@/services/syllabus.service";
+import { aiService } from "@/services/ai.service";
 import { Upload, X } from "lucide-react";
 
-const ACCEPTED_FILE_TYPES = ".pdf,.doc,.docx";
+const ACCEPTED_FILE_TYPES = "application/pdf,.pdf";
 
 export default function NewSyllabusPage() {
   const params = useParams();
@@ -24,6 +24,16 @@ export default function NewSyllabusPage() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
+
+    const isPdf =
+      file?.type === "application/pdf" || file?.name.toLowerCase().endsWith(".pdf");
+
+    if (file && !isPdf) {
+      e.target.value = "";
+      setSelectedFile(null);
+      setErrorMessage("Only PDF files can be indexed for course AI.");
+      return;
+    }
 
     setSelectedFile(file);
     setSuccessMessage("");
@@ -43,9 +53,9 @@ export default function NewSyllabusPage() {
       setErrorMessage("");
       setSuccessMessage("");
 
-      await syllabusService.uploadSyllabusDocument(courseId, selectedFile);
+      await aiService.uploadCourseResource(courseId, selectedFile);
 
-      setSuccessMessage("Syllabus uploaded successfully. Redirecting...");
+      setSuccessMessage("PDF uploaded. AI indexing is running. Redirecting...");
 
       window.setTimeout(() => {
         router.push(`/instructor/courses/${courseId}`);
@@ -94,13 +104,11 @@ export default function NewSyllabusPage() {
                   </div>
 
                   <span className="text-sm font-medium text-slate-900">
-                    {selectedFile
-                      ? selectedFile.name
-                      : "Choose a PDF or Word document"}
+                    {selectedFile ? selectedFile.name : "Choose a syllabus PDF"}
                   </span>
 
                   <span className="mt-2 text-xs text-slate-500">
-                    Accepted formats: PDF, DOC, DOCX
+                    Text-based PDF files work best
                   </span>
 
                   <input

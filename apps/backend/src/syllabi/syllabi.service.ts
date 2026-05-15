@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSyllabusDto } from './create-syllabus.dto';
 import { UpdateSyllabusDto } from './update-syllabus.dto';
 import { CreateSyllabusWeekDto } from './create-syllabus-week.dto';
 import { UpdateSyllabusWeekDto } from './update-syllabus-week.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ResourcesService } from '../resources/resources.service';
 
 type UploadedSyllabusFile = Pick<
   Express.Multer.File,
@@ -16,6 +17,7 @@ export class SyllabiService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
+    private readonly resourcesService: ResourcesService,
   ) {}
 
   findAll() {
@@ -58,7 +60,9 @@ export class SyllabiService {
     return syllabus;
   }
 
-  create(data: CreateSyllabusDto) {
+  async create(data: CreateSyllabusDto, instructorId: string) {
+    await this.ensureCourseOwner(data.courseId, instructorId);
+
     return this.prisma.syllabus.create({
       data: {
         courseId: data.courseId,
@@ -74,7 +78,11 @@ export class SyllabiService {
     });
   }
 
-  async uploadDocument(courseId: string, file: UploadedSyllabusFile) {
+  async uploadDocument(
+    courseId: string,
+    instructorId: string,
+    file: UploadedSyllabusFile,
+  ) {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
       include: {
@@ -89,6 +97,12 @@ export class SyllabiService {
 
     if (!course) {
       throw new NotFoundException('Course not found');
+    }
+
+    if (course.instructorId !== instructorId) {
+      throw new ForbiddenException(
+        'You can only upload syllabi for your own courses',
+      );
     }
 
     const uploadedAt = new Date();
@@ -128,11 +142,16 @@ export class SyllabiService {
       'SYLLABUS_UPDATED',
     );
 
+    if (file.mimetype === 'application/pdf') {
+      await this.tryIndexSyllabusDocument(courseId, instructorId, file);
+    }
+
     return savedSyllabus;
   }
 
-  async update(id: string, dto: UpdateSyllabusDto) {
+  async update(id: string, dto: UpdateSyllabusDto, instructorId: string) {
     const existing = await this.findById(id);
+    this.assertCourseOwner(existing.course.instructor.id, instructorId);
     const existingWithStructuredFields = existing as typeof existing & {
       grading?: string | null;
       policies?: string | null;
@@ -200,7 +219,14 @@ export class SyllabiService {
     });
   }
 
-  createWeek(syllabusId: string, data: CreateSyllabusWeekDto) {
+  async createWeek(
+    syllabusId: string,
+    data: CreateSyllabusWeekDto,
+    instructorId: string,
+  ) {
+    const syllabus = await this.findById(syllabusId);
+    this.assertCourseOwner(syllabus.course.instructor.id, instructorId);
+
     return this.prisma.syllabusWeek.create({
       data: {
         syllabusId,
@@ -212,11 +238,18 @@ export class SyllabiService {
     });
   }
 
-  async updateWeek(weekId: string, dto: UpdateSyllabusWeekDto) {
+  async updateWeek(
+    weekId: string,
+    dto: UpdateSyllabusWeekDto,
+    instructorId: string,
+  ) {
     const week = await this.prisma.syllabusWeek.findUnique({
       where: { id: weekId },
     });
     if (!week) throw new NotFoundException('Week not found');
+
+    const existingSyllabus = await this.findById(week.syllabusId);
+    this.assertCourseOwner(existingSyllabus.course.instructor.id, instructorId);
 
     const updated = await this.prisma.syllabusWeek.update({
       where: { id: weekId },
@@ -240,11 +273,15 @@ export class SyllabiService {
     return updated;
   }
 
-  async deleteWeek(weekId: string) {
+  async deleteWeek(weekId: string, instructorId: string) {
     const week = await this.prisma.syllabusWeek.findUnique({
       where: { id: weekId },
     });
     if (!week) throw new NotFoundException('Week not found');
+
+    const syllabus = await this.findById(week.syllabusId);
+    this.assertCourseOwner(syllabus.course.instructor.id, instructorId);
+
     return this.prisma.syllabusWeek.delete({ where: { id: weekId } });
   }
 
@@ -267,6 +304,40 @@ export class SyllabiService {
         message,
         type,
       );
+    }
+  }
+
+  private async ensureCourseOwner(courseId: string, instructorId: string) {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { instructorId: true },
+    });
+
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
+
+    this.assertCourseOwner(course.instructorId, instructorId);
+  }
+
+  private assertCourseOwner(ownerId: string, instructorId: string) {
+    if (ownerId !== instructorId) {
+      throw new ForbiddenException(
+        'You can only manage syllabi for your own courses',
+      );
+    }
+  }
+
+  private async tryIndexSyllabusDocument(
+    courseId: string,
+    instructorId: string,
+    file: UploadedSyllabusFile,
+  ) {
+    try {
+      await this.resourcesService.uploadAndIndex(courseId, instructorId, file);
+    } catch {
+      // The syllabus upload itself should remain usable even if the local AI
+      // provider is offline. The resource record is marked FAILED by ResourcesService.
     }
   }
 }

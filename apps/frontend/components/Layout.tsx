@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import CourseAssistantWidget from "@/components/CourseAssistantWidget";
 import {
   Bell,
   BookOpen,
@@ -148,6 +149,7 @@ export default function Layout({ children }: LayoutProps) {
         </aside>
 
         <main className="min-w-0 flex-1 overflow-x-hidden">{children}</main>
+        <CourseAssistantWidget role="student" />
       </div>
     </div>
   );

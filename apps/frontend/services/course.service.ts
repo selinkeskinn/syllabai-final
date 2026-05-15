@@ -81,8 +81,31 @@ export const courseService = {
     title: string;
     description: string;
     semester: string;
+    file?: File | null;
   }) {
-    const response = await api.post("/courses", data);
+    if (data.file) {
+      const formData = new FormData();
+      formData.append("code", data.code);
+      formData.append("title", data.title);
+      formData.append("description", data.description);
+      formData.append("semester", data.semester);
+      formData.append("file", data.file);
+
+      const response = await api.post("/courses", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
+
+      return response.data;
+    }
+
+    const response = await api.post("/courses", {
+      code: data.code,
+      title: data.title,
+      description: data.description,
+      semester: data.semester,
+    });
     return response.data;
   },
 };

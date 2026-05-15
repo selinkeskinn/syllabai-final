@@ -8,6 +8,7 @@ import {
   Post,
   Put,
   BadRequestException,
+  Request,
   UseGuards,
   UploadedFile,
   UseInterceptors,
@@ -100,8 +101,8 @@ export class SyllabiController {
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a syllabus (instructor only)' })
-  create(@Body() body: CreateSyllabusDto) {
-    return this.syllabiService.create(body);
+  create(@Body() body: CreateSyllabusDto, @Request() req: any) {
+    return this.syllabiService.create(body, req.user.userId);
   }
 
   @Post('course/:courseId/upload')
@@ -115,13 +116,14 @@ export class SyllabiController {
   @UseInterceptors(FileInterceptor('file', syllabusUploadOptions))
   uploadDocument(
     @Param('courseId') courseId: string,
+    @Request() req: any,
     @UploadedFile() file: Express.Multer.File | undefined,
   ) {
     if (!file) {
       throw new BadRequestException('A syllabus document is required.');
     }
 
-    return this.syllabiService.uploadDocument(courseId, file);
+    return this.syllabiService.uploadDocument(courseId, req.user.userId, file);
   }
 
   @Put(':id')
@@ -131,8 +133,12 @@ export class SyllabiController {
   @ApiOperation({
     summary: 'Update syllabus (creates version snapshot + notifies students)',
   })
-  update(@Param('id') id: string, @Body() body: UpdateSyllabusDto) {
-    return this.syllabiService.update(id, body);
+  update(
+    @Param('id') id: string,
+    @Body() body: UpdateSyllabusDto,
+    @Request() req: any,
+  ) {
+    return this.syllabiService.update(id, body, req.user.userId);
   }
 
   @Get(':id/versions')
@@ -157,8 +163,9 @@ export class SyllabiController {
   createWeek(
     @Param('syllabusId') syllabusId: string,
     @Body() body: CreateSyllabusWeekDto,
+    @Request() req: any,
   ) {
-    return this.syllabiService.createWeek(syllabusId, body);
+    return this.syllabiService.createWeek(syllabusId, body, req.user.userId);
   }
 
   @Put(':syllabusId/weeks/:weekId')
@@ -169,8 +176,9 @@ export class SyllabiController {
   updateWeek(
     @Param('weekId') weekId: string,
     @Body() body: UpdateSyllabusWeekDto,
+    @Request() req: any,
   ) {
-    return this.syllabiService.updateWeek(weekId, body);
+    return this.syllabiService.updateWeek(weekId, body, req.user.userId);
   }
 
   @Delete(':syllabusId/weeks/:weekId')
@@ -178,7 +186,7 @@ export class SyllabiController {
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a week (instructor only)' })
-  deleteWeek(@Param('weekId') weekId: string) {
-    return this.syllabiService.deleteWeek(weekId);
+  deleteWeek(@Param('weekId') weekId: string, @Request() req: any) {
+    return this.syllabiService.deleteWeek(weekId, req.user.userId);
   }
 }

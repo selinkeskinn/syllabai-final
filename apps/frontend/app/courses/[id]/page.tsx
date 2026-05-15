@@ -19,6 +19,7 @@ import {
   GraduationCap,
   Info,
   Layers3,
+  Loader2,
   LucideIcon,
   Mail,
   NotebookText,
@@ -31,6 +32,7 @@ import {
 import {
   Cell,
   Legend,
+  LegendPayload,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -45,6 +47,7 @@ import {
   getSyllabusDescriptionText,
   getSyllabusDocumentMetadata,
   Syllabus,
+  SyllabusWeek,
   syllabusService,
 } from "@/services/syllabus.service";
 
@@ -84,6 +87,12 @@ type CourseDetail = {
   deadlines: CourseDeadline[];
   _count?: {
     enrollments?: number;
+  };
+};
+
+type GradingLegendPayload = LegendPayload & {
+  payload?: {
+    value?: number;
   };
 };
 
@@ -310,6 +319,23 @@ const getDeadlineTone = (dueDate?: string | null) => {
   return "text-emerald-600";
 };
 
+const getApiErrorMessage = (error: unknown, fallback: string) => {
+  if (
+    error &&
+    typeof error === "object" &&
+    "response" in error &&
+    (error as { response?: { data?: { message?: unknown } } }).response?.data
+      ?.message
+  ) {
+    const message = (error as { response: { data: { message: unknown } } })
+      .response.data.message;
+
+    return Array.isArray(message) ? message.join(", ") : String(message);
+  }
+
+  return fallback;
+};
+
 export default function CourseDetailPage() {
   const params = useParams();
   const courseId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -326,7 +352,6 @@ export default function CourseDetailPage() {
     string | number | null
   >(null);
   const [activePolicyTab, setActivePolicyTab] = useState("communication");
-
   useEffect(() => {
     if (!courseId) return;
 
@@ -475,7 +500,7 @@ export default function CourseDetailPage() {
     return place === "Online" ? "text-purple-600" : "text-blue-600";
   };
 
-  const getCalendarAssessment = (week: any) => {
+  const getCalendarAssessment = (week: SyllabusWeek) => {
     const topic = String(week.topic || "");
     const todo = String(week.todo || "");
     const details = String(week.details || "");
@@ -496,7 +521,7 @@ export default function CourseDetailPage() {
     return "—";
   };
 
-  const getCalendarRowClass = (week: any) => {
+  const getCalendarRowClass = (week: SyllabusWeek) => {
     const text = `${week.topic || ""} ${week.todo || ""} ${week.details || ""}`.toLowerCase();
 
     if (text.includes("final")) return "bg-red-50";
@@ -505,7 +530,7 @@ export default function CourseDetailPage() {
     return "";
   };
 
-  const getCalendarTopicClass = (week: any) => {
+  const getCalendarTopicClass = (week: SyllabusWeek) => {
     const text = `${week.topic || ""} ${week.todo || ""} ${week.details || ""}`.toLowerCase();
 
     if (text.includes("final")) return "text-red-900 font-semibold";
@@ -514,7 +539,7 @@ export default function CourseDetailPage() {
     return "text-slate-700";
   };
 
-  const getCalendarTodoClass = (week: any) => {
+  const getCalendarTodoClass = (week: SyllabusWeek) => {
     const text = `${week.topic || ""} ${week.todo || ""} ${week.details || ""}`.toLowerCase();
 
     if (text.includes("final")) return "text-red-700";
@@ -1528,9 +1553,13 @@ export default function CourseDetailPage() {
                             <Legend
                               verticalAlign="bottom"
                               height={36}
-                              formatter={(value, entry: any) =>
-                                `${value} (${entry.payload.value}%)`
-                              }
+                              formatter={(value, entry) => {
+                                const legendEntry =
+                                  entry as GradingLegendPayload;
+                                return `${value} (${
+                                  legendEntry.payload?.value ?? 0
+                                }%)`;
+                              }}
                             />
                           </PieChart>
                         </ResponsiveContainer>
