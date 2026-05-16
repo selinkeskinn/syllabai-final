@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import {
   NotificationPreferences,
   userService,
@@ -47,6 +47,30 @@ const getApiErrorMessage = (error: any, fallback: string) => {
   }
 
   return fallback;
+};
+
+const getFileUrl = (value?: string | null) => {
+  if (!value) return "";
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+  const serverBase = apiBase.replace(/\/api\/?$/, "");
+  return `${serverBase}${value.startsWith("/") ? value : `/${value}`}`;
+};
+
+const formatMonthYear = (value?: string | null) => {
+  if (!value) return "Not available";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not available";
+
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
 };
 
 const preferenceLabels: {
@@ -111,8 +135,15 @@ export default function AccountSettings({
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [savingPreferences, setSavingPreferences] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   const isStudent = user?.role === "STUDENT";
+  const avatarUrl = getFileUrl(user?.avatarUrl);
+  const accountType =
+    user?.role === "INSTRUCTOR" ? "Instructor Account" : "Student Account";
+  const accountStatus = user?.isActive === false ? "Inactive" : "Active";
+  const memberSince = formatMonthYear(user?.createdAt);
+  const semester = "Spring 2026";
 
   const initials = useMemo(() => {
     const value = profileForm.name || profileForm.email || "User";
@@ -187,6 +218,7 @@ export default function AccountSettings({
         studentId: updatedUser.studentId || "",
       });
       localStorage.setItem("user", JSON.stringify(updatedUser));
+      window.dispatchEvent(new Event("user-updated"));
       setMessage("Profile updated successfully.");
     } catch (error: any) {
       setErrorMessage(
@@ -277,6 +309,65 @@ export default function AccountSettings({
     }
   };
 
+  const handleAvatarUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    if (!["image/jpeg", "image/png", "image/gif"].includes(file.type)) {
+      setErrorMessage("Please upload a JPG, PNG, or GIF image.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      setErrorMessage("Profile photo must be smaller than 2MB.");
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      setUploadingAvatar(true);
+      setMessage("");
+      setErrorMessage("");
+
+      const updatedUser = await userService.uploadAvatar(file);
+
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      window.dispatchEvent(new Event("user-updated"));
+      setMessage("Profile photo updated successfully.");
+    } catch (error: any) {
+      setErrorMessage(
+        getApiErrorMessage(error, "Profile photo could not be uploaded.")
+      );
+    } finally {
+      setUploadingAvatar(false);
+      event.target.value = "";
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    try {
+      setUploadingAvatar(true);
+      setMessage("");
+      setErrorMessage("");
+
+      const updatedUser = await userService.removeAvatar();
+
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      window.dispatchEvent(new Event("user-updated"));
+      setMessage("Profile photo removed successfully.");
+    } catch (error: any) {
+      setErrorMessage(
+        getApiErrorMessage(error, "Profile photo could not be removed.")
+      );
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white px-8 py-6">
@@ -303,6 +394,56 @@ export default function AccountSettings({
                   {errorMessage || message}
                 </div>
               )}
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-6">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Profile Picture
+                </h2>
+
+                <div className="mt-5 flex flex-wrap items-center gap-5">
+                  <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-blue-600 text-2xl font-bold text-white">
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt={profileForm.name || "Profile photo"}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      initials
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex flex-wrap gap-3">
+                      <label className="inline-flex cursor-pointer items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700">
+                        {uploadingAvatar ? "Uploading..." : "Upload New Photo"}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/gif"
+                          onChange={handleAvatarUpload}
+                          disabled={uploadingAvatar}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {avatarUrl ? (
+                        <button
+                          type="button"
+                          onClick={handleRemoveAvatar}
+                          disabled={uploadingAvatar}
+                          className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Remove Photo
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <p className="mt-3 text-sm text-slate-500">
+                      JPG, PNG or GIF. Max size 2MB.
+                    </p>
+                  </div>
+                </div>
+              </section>
 
               <section className="rounded-2xl border border-slate-200 bg-white p-6">
                 <h2 className="text-lg font-semibold text-slate-900">
@@ -470,8 +611,16 @@ export default function AccountSettings({
             <aside className="space-y-6">
               <section className="rounded-2xl border border-slate-200 bg-white p-6">
                 <div className="flex items-center gap-4">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white">
-                    {initials}
+                  <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-blue-600 text-xl font-bold text-white">
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt={profileForm.name || "Profile photo"}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      initials
+                    )}
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-lg font-semibold text-slate-900">
@@ -483,6 +632,51 @@ export default function AccountSettings({
                     <p className="mt-1 text-xs font-medium uppercase text-blue-600">
                       {user?.role || "USER"}
                     </p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-6">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Account Status
+                </h2>
+
+                <div className="mt-5 space-y-5">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-5">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        Account Type
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {accountType}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
+                        accountStatus === "Active"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {accountStatus}
+                    </span>
+                  </div>
+
+                  <div className="border-b border-slate-100 pb-5">
+                    <p className="text-sm font-semibold text-slate-900">
+                      Member Since
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {memberSince}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Semester
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">{semester}</p>
                   </div>
                 </div>
               </section>

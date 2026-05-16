@@ -23,12 +23,25 @@ type StoredUser = {
   name?: string;
   email?: string;
   role?: string;
+  avatarUrl?: string | null;
 };
 
 type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
+};
+
+const getAvatarUrl = (value?: string | null) => {
+  if (!value) return "";
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+  const serverBase = apiBase.replace(/\/api\/?$/, "");
+  return `${serverBase}${value.startsWith("/") ? value : `/${value}`}`;
 };
 
 const navItems: NavItem[] = [
@@ -100,6 +113,20 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
 
       setUser(parsedUser);
       setAuthChecked(true);
+
+      const refreshStoredUser = () => {
+        const updatedRawUser = localStorage.getItem("user");
+        if (!updatedRawUser) return;
+
+        try {
+          setUser(JSON.parse(updatedRawUser) as StoredUser);
+        } catch {
+          // Ignore malformed local storage updates.
+        }
+      };
+
+      window.addEventListener("user-updated", refreshStoredUser);
+      return () => window.removeEventListener("user-updated", refreshStoredUser);
     } catch (error) {
       console.error("Instructor layout auth check error:", error);
       localStorage.removeItem("token");
@@ -176,8 +203,16 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
               className="mb-4 block rounded-2xl bg-blue-50 p-4 transition hover:bg-blue-100"
             >
               <div className="flex items-center gap-4">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white">
-                  {getInitials(user?.name)}
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-blue-600 text-xl font-bold text-white">
+                  {getAvatarUrl(user?.avatarUrl) ? (
+                    <img
+                      src={getAvatarUrl(user?.avatarUrl)}
+                      alt={user?.name || "Profile photo"}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    getInitials(user?.name)
+                  )}
                 </div>
 
                 <div className="min-w-0">
