@@ -17,6 +17,13 @@ export type Announcement = {
   course?: AnnouncementCourse | null;
 };
 
+export type AnnouncementPayload = {
+  courseId: string;
+  title: string;
+  content: string;
+  type?: string;
+};
+
 export const announcementService = {
   async getAllAnnouncements(courseId?: string): Promise<Announcement[]> {
     const response = await api.get("/announcements", {
@@ -34,5 +41,23 @@ export const announcementService = {
     }
 
     return [];
+  },
+
+  async createAnnouncement(data: AnnouncementPayload): Promise<Announcement> {
+    const response = await api.post("/announcements", data);
+    return response.data;
+  },
+
+  async updateAnnouncement(
+    id: string | number,
+    data: Partial<Omit<AnnouncementPayload, "courseId">>
+  ): Promise<Announcement> {
+    const response = await api.put(`/announcements/${id}`, data);
+    return response.data;
+  },
+
+  async deleteAnnouncement(id: string | number) {
+    const response = await api.delete(`/announcements/${id}`);
+    return response.data;
   },
 };
