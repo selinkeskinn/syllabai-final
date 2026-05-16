@@ -76,36 +76,51 @@ function getInitials(name?: string) {
 export default function InstructorLayout({ children }: InstructorLayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<StoredUser>({
-    name: "Instructor User",
-    email: "instructor@test.com",
-  });
+  const [user, setUser] = useState<StoredUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem("user");
+    const token = localStorage.getItem("token");
+    const storedUser = localStorage.getItem("user");
 
-      if (storedUser) {
-        const parsedUser = JSON.parse(storedUser) as StoredUser;
-        setUser({
-          name: parsedUser.name || "Instructor User",
-          email: parsedUser.email || "instructor@test.com",
-          role: parsedUser.role,
-        });
-      }
-    } catch {
-      setUser({
-        name: "Instructor User",
-        email: "instructor@test.com",
-      });
+    if (!token || !storedUser) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
+      return;
     }
-  }, []);
+
+    try {
+      const parsedUser = JSON.parse(storedUser) as StoredUser;
+
+      if (parsedUser.role !== "INSTRUCTOR") {
+        router.replace(parsedUser.role === "STUDENT" ? "/dashboard" : "/");
+        return;
+      }
+
+      setUser(parsedUser);
+      setAuthChecked(true);
+    } catch (error) {
+      console.error("Instructor layout auth check error:", error);
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
+    }
+  }, [router]);
 
   const handleSignOut = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     router.push("/");
   };
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -159,15 +174,15 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
             <div className="mb-4 rounded-2xl bg-blue-50 p-4">
               <div className="flex items-center gap-4">
                 <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white">
-                  {getInitials(user.name)}
+                  {getInitials(user?.name)}
                 </div>
 
                 <div className="min-w-0">
                   <p className="truncate text-[19px] font-bold text-slate-900">
-                    {user.name || "Instructor User"}
+                    {user?.name || "Instructor User"}
                   </p>
                   <p className="truncate text-sm text-slate-500">
-                    {user.email || "instructor@test.com"}
+                    {user?.email || "No email"}
                   </p>
                 </div>
               </div>

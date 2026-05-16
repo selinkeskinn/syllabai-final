@@ -21,6 +21,7 @@ type LayoutProps = {
 type StoredUser = {
   name?: string;
   email?: string;
+  role?: string;
 };
 
 type NavItem = {
@@ -54,28 +55,57 @@ export default function Layout({ children }: LayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [storedUser, setStoredUser] = useState<StoredUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
+    const token = localStorage.getItem("token");
     const rawUser = localStorage.getItem("user");
 
-    if (!rawUser) {
-      setStoredUser(null);
+    if (!token || !rawUser) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
       return;
     }
 
     try {
-      setStoredUser(JSON.parse(rawUser) as StoredUser);
+      const parsedUser = JSON.parse(rawUser) as StoredUser;
+
+      if (parsedUser.role === "INSTRUCTOR") {
+        router.replace("/instructor/dashboard");
+        return;
+      }
+
+      if (parsedUser.role && parsedUser.role !== "STUDENT") {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        router.replace("/");
+        return;
+      }
+
+      setStoredUser(parsedUser);
+      setAuthChecked(true);
     } catch (error) {
-      console.error("Student layout user parse error:", error);
-      setStoredUser(null);
+      console.error("Student layout auth check error:", error);
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
     }
-  }, []);
+  }, [router]);
 
   const handleSignOut = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     router.push("/");
   };
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f6f8fc]">
@@ -132,7 +162,7 @@ export default function Layout({ children }: LayoutProps) {
                     {storedUser?.name || "Student User"}
                   </p>
                   <p className="truncate text-sm text-slate-500">
-                    {storedUser?.email || "student@syllabai.local"}
+                    {storedUser?.email || "No email"}
                   </p>
                 </div>
               </div>
