@@ -121,6 +121,20 @@ type DisplayWeek = {
   todo?: string | null;
 };
 
+type WeekFormState = {
+  weekNo: string;
+  topic: string;
+  details: string;
+  todo: string;
+};
+
+const emptyWeekForm: WeekFormState = {
+  weekNo: "",
+  topic: "",
+  details: "",
+  todo: "",
+};
+
 type GradingPieLabelProps = {
   name?: string;
   value?: number;
@@ -445,6 +459,12 @@ export default function InstructorCourseDetailPage() {
     null
   );
   const [loadingAiSummary, setLoadingAiSummary] = useState(false);
+  const [showWeekModal, setShowWeekModal] = useState(false);
+  const [editingWeek, setEditingWeek] = useState<DisplayWeek | null>(null);
+  const [weekForm, setWeekForm] = useState<WeekFormState>(emptyWeekForm);
+  const [savingWeek, setSavingWeek] = useState(false);
+  const [deletingWeekId, setDeletingWeekId] = useState<string | null>(null);
+  const [weekMessage, setWeekMessage] = useState("");
 
   const handleCopyJoinKey = async () => {
     if (!course?.joinKey) return;
@@ -607,6 +627,166 @@ export default function InstructorCourseDetailPage() {
         details: week.details,
         todo: week.todo,
       }));
+
+  const syncWeekState = (weeks: DisplayWeek[]) => {
+    const sortedWeeks = [...weeks].sort((a, b) => a.weekNo - b.weekNo);
+
+    setSyllabus((prev) =>
+      prev
+        ? {
+            ...prev,
+            weeks: sortedWeeks,
+          }
+        : prev
+    );
+
+    setCourse((prev) =>
+      prev?.syllabus
+        ? {
+            ...prev,
+            syllabus: {
+              ...prev.syllabus,
+              weeks: sortedWeeks,
+            },
+          }
+        : prev
+    );
+  };
+
+  const openCreateWeekModal = () => {
+    if (!resolvedSyllabus?.id) {
+      setWeekMessage("Create or upload a syllabus before adding weekly topics.");
+      return;
+    }
+
+    const nextWeekNo =
+      displayedWeeks.length > 0
+        ? Math.max(...displayedWeeks.map((week) => week.weekNo)) + 1
+        : 1;
+
+    setEditingWeek(null);
+    setWeekForm({
+      ...emptyWeekForm,
+      weekNo: String(nextWeekNo),
+    });
+    setWeekMessage("");
+    setShowWeekModal(true);
+  };
+
+  const openEditWeekModal = (week: DisplayWeek) => {
+    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
+      setWeekMessage("AI generated weeks cannot be edited directly.");
+      return;
+    }
+
+    setEditingWeek(week);
+    setWeekForm({
+      weekNo: String(week.weekNo),
+      topic: week.topic || "",
+      details: week.details || "",
+      todo: week.todo || "",
+    });
+    setWeekMessage("");
+    setShowWeekModal(true);
+  };
+
+  const closeWeekModal = () => {
+    if (savingWeek) return;
+    setShowWeekModal(false);
+    setEditingWeek(null);
+    setWeekForm(emptyWeekForm);
+  };
+
+  const handleWeekSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!resolvedSyllabus?.id) {
+      setWeekMessage("Create or upload a syllabus before saving weeks.");
+      return;
+    }
+
+    const parsedWeekNo = Number(weekForm.weekNo);
+
+    if (!Number.isInteger(parsedWeekNo) || parsedWeekNo < 1) {
+      setWeekMessage("Week number must be a positive number.");
+      return;
+    }
+
+    if (!weekForm.topic.trim()) {
+      setWeekMessage("Topic is required.");
+      return;
+    }
+
+    try {
+      setSavingWeek(true);
+      setWeekMessage("");
+
+      const payload = {
+        weekNo: parsedWeekNo,
+        topic: weekForm.topic.trim(),
+        details: weekForm.details.trim() || undefined,
+        todo: weekForm.todo.trim() || undefined,
+      };
+
+      if (editingWeek) {
+        const updated = await syllabusService.updateWeek(
+          resolvedSyllabus.id,
+          editingWeek.id,
+          payload
+        );
+
+        syncWeekState(
+          displayedWeeks.map((week) =>
+            week.id === updated.id ? updated : week
+          )
+        );
+        setWeekMessage("Week updated successfully.");
+      } else {
+        const created = await syllabusService.createWeek(
+          resolvedSyllabus.id,
+          payload
+        );
+
+        syncWeekState([...displayedWeeks, created]);
+        setWeekMessage("Week added successfully.");
+      }
+
+      closeWeekModal();
+    } catch (error) {
+      console.error("Week save error:", error);
+      setWeekMessage("Week could not be saved.");
+    } finally {
+      setSavingWeek(false);
+    }
+  };
+
+  const handleDeleteWeek = async (week: DisplayWeek) => {
+    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
+      setWeekMessage("AI generated weeks cannot be deleted directly.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete Week ${week.weekNo}? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingWeekId(week.id);
+      setWeekMessage("");
+
+      await syllabusService.deleteWeek(resolvedSyllabus.id, week.id);
+
+      syncWeekState(displayedWeeks.filter((item) => item.id !== week.id));
+      setWeekMessage("Week deleted successfully.");
+    } catch (error) {
+      console.error("Week delete error:", error);
+      setWeekMessage("Week could not be deleted.");
+    } finally {
+      setDeletingWeekId(null);
+    }
+  };
 
   const resourceFiles: ResourceFile[] = [
     ...aiResources.map((resource) => ({
@@ -1467,14 +1647,31 @@ export default function InstructorCourseDetailPage() {
                       </p>
                     </div>
 
-                    <Link
-                      href={`/instructor/courses/${course.id}/syllabus/edit`}
-                      className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
-                    >
-                      <FileText className="h-4 w-4" />
-                      <span className="text-sm font-medium">Manage PDFs</span>
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={openCreateWeekModal}
+                        className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span className="text-sm font-medium">Add Week</span>
+                      </button>
+
+                      <Link
+                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                        className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
+                      >
+                        <FileText className="h-4 w-4" />
+                        <span className="text-sm font-medium">Manage PDFs</span>
+                      </Link>
+                    </div>
                   </div>
+
+                  {weekMessage ? (
+                    <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700">
+                      {weekMessage}
+                    </div>
+                  ) : null}
 
                   {loadingSyllabus || loadingAiSummary ? (
                     <div className="p-8 text-sm text-slate-500">
@@ -1501,6 +1698,9 @@ export default function InstructorCourseDetailPage() {
                               </th>
                               <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">
                                 Assignment/Deadline
+                              </th>
+                              <th className="w-36 px-6 py-4 text-right text-sm font-semibold text-slate-700">
+                                Actions
                               </th>
                             </tr>
                           </thead>
@@ -1546,6 +1746,33 @@ export default function InstructorCourseDetailPage() {
                                       className={`px-6 py-5 text-sm ${tone.assignment}`}
                                     >
                                       {week.details || "—"}
+                                    </td>
+
+                                    <td className="px-6 py-5 text-right">
+                                      <div className="flex justify-end gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditWeekModal(week)}
+                                          disabled={String(week.id).startsWith("ai-week-")}
+                                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                          <Edit2 className="h-3.5 w-3.5" />
+                                          Edit
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteWeek(week)}
+                                          disabled={
+                                            deletingWeekId === week.id ||
+                                            String(week.id).startsWith("ai-week-")
+                                          }
+                                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                          {deletingWeekId === week.id ? "Deleting..." : "Delete"}
+                                        </button>
+                                      </div>
                                     </td>
                                   </tr>
                                 );
@@ -2230,6 +2457,121 @@ export default function InstructorCourseDetailPage() {
             </main>
           </>
         )}
+      {showWeekModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <form
+            onSubmit={handleWeekSubmit}
+            className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900">
+                {editingWeek ? "Edit Week" : "Add Week"}
+              </h3>
+
+              <button
+                type="button"
+                onClick={closeWeekModal}
+                className="rounded-lg p-2 transition hover:bg-slate-100"
+              >
+                <XCircle className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Week Number
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={weekForm.weekNo}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      weekNo: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Topic
+                </label>
+                <input
+                  type="text"
+                  value={weekForm.topic}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      topic: event.target.value,
+                    }))
+                  }
+                  placeholder="Weekly topic"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  To Do
+                </label>
+                <textarea
+                  rows={3}
+                  value={weekForm.todo}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      todo: event.target.value,
+                    }))
+                  }
+                  placeholder="Student tasks or preparation notes"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Assignment / Deadline
+                </label>
+                <textarea
+                  rows={3}
+                  value={weekForm.details}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      details: event.target.value,
+                    }))
+                  }
+                  placeholder="Assignment, exam, quiz, or deadline details"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeWeekModal}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={savingWeek}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingWeek ? "Saving..." : "Save Week"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
       </div>
     </InstructorLayout>
   );
