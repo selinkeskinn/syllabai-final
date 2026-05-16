@@ -9,6 +9,9 @@ export type UserProfile = {
   studentId?: string | null;
   role?: "STUDENT" | "INSTRUCTOR" | string;
   avatarUrl?: string | null;
+  createdAt?: string | null;
+  isActive?: boolean | null;
+  deactivatedAt?: string | null;
 };
 
 export type UpdateProfilePayload = {
@@ -55,6 +58,24 @@ export const userService = {
 
   async updateNotificationPreferences(data: NotificationPreferences) {
     const response = await api.patch("/users/me/notification-preferences", data);
+    return response.data;
+  },
+
+  async uploadAvatar(file: File): Promise<UserProfile> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await api.post("/users/me/avatar", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+
+    return response.data;
+  },
+
+  async removeAvatar(): Promise<UserProfile> {
+    const response = await api.delete("/users/me/avatar");
     return response.data;
   },
 };
