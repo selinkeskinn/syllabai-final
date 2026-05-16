@@ -152,7 +152,10 @@ export default function Layout({ children }: LayoutProps) {
           </nav>
 
           <div className="hidden border-t border-slate-200 p-4 lg:block">
-            <div className="rounded-[28px] bg-[#f2f6ff] p-4">
+            <Link
+              href="/settings"
+              className="block rounded-[28px] bg-[#f2f6ff] p-4 transition hover:bg-blue-50"
+            >
               <div className="flex items-center gap-4">
                 <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-xl font-semibold text-white">
                   {getInitials(storedUser?.name)}
@@ -166,7 +169,7 @@ export default function Layout({ children }: LayoutProps) {
                   </p>
                 </div>
               </div>
-            </div>
+            </Link>
 
             <button
               onClick={handleSignOut}

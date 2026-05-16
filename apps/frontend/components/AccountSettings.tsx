@@ -166,11 +166,6 @@ export default function AccountSettings({
       return;
     }
 
-    if (!profileForm.email.trim()) {
-      setErrorMessage("Email cannot be empty.");
-      return;
-    }
-
     try {
       setSavingProfile(true);
       setMessage("");
@@ -180,8 +175,7 @@ export default function AccountSettings({
         name: profileForm.name.trim(),
         firstName: profileForm.firstName.trim(),
         lastName: profileForm.lastName.trim(),
-        email: profileForm.email.trim().toLowerCase(),
-        studentId: isStudent ? profileForm.studentId.trim() : undefined,
+        
       });
 
       setUser(updatedUser);
@@ -376,18 +370,11 @@ export default function AccountSettings({
                     <input
                       type="email"
                       value={profileForm.email}
-                      onChange={(event) =>
-                        setProfileForm((prev) => ({
-                          ...prev,
-                          email: event.target.value,
-                        }))
-                      }
-                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      readOnly
+                      className="w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500 outline-none"
                     />
                     <p className="mt-1 text-xs text-slate-500">
-                      {isStudent
-                        ? "Student emails must end with @bahcesehir.edu.tr."
-                        : "Instructor emails must end with @bau.edu.tr."}
+                      Email address is used for sign in and cannot be changed from settings.
                     </p>
                   </div>
 
@@ -398,14 +385,12 @@ export default function AccountSettings({
                       </label>
                       <input
                         value={profileForm.studentId}
-                        onChange={(event) =>
-                          setProfileForm((prev) => ({
-                            ...prev,
-                            studentId: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                        readOnly
+                        className="w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500 outline-none"
                       />
+                      <p className="mt-1 text-xs text-slate-500">
+                        Student ID is used for account verification and cannot be changed from settings.
+                      </p>
                     </div>
                   ) : null}
 

@@ -15,8 +15,6 @@ export type UpdateProfilePayload = {
   name?: string;
   firstName?: string;
   lastName?: string;
-  email?: string;
-  studentId?: string;
 };
 
 export type UpdatePasswordPayload = {

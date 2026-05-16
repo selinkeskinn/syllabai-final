@@ -171,7 +171,10 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
           </nav>
 
           <div className="border-t border-slate-200 p-5">
-            <div className="mb-4 rounded-2xl bg-blue-50 p-4">
+            <Link
+              href="/instructor/settings"
+              className="mb-4 block rounded-2xl bg-blue-50 p-4 transition hover:bg-blue-100"
+            >
               <div className="flex items-center gap-4">
                 <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white">
                   {getInitials(user?.name)}
@@ -186,7 +189,7 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
                   </p>
                 </div>
               </div>
-            </div>
+            </Link>
 
             <button
               type="button"
