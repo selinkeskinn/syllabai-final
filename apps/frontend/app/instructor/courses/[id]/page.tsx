@@ -27,7 +27,6 @@ import {
   Calendar,
   CheckCircle2,
   ChevronDown,
-  Download,
   Edit2,
   FileText,
   KeyRound,
@@ -326,6 +325,18 @@ const getResourceStatusLabel = (status: ResourceFile["status"]) => {
   return "Document";
 };
 
+const formatAiErrorMessage = (message: string) => {
+  if (
+    message.includes("AI provider is not reachable") ||
+    message.includes("AI_BASE_URL") ||
+    message.includes("local model server")
+  ) {
+    return "AI indexing is not available right now. Please start the AI service and upload again.";
+  }
+
+  return message;
+};
+
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (
     error &&
@@ -336,7 +347,7 @@ const getApiErrorMessage = (error: unknown, fallback: string) => {
   ) {
     const message = (error as { response: { data: { message: unknown } } })
       .response.data.message;
-    if (typeof message === "string") return message;
+    if (typeof message === "string") return formatAiErrorMessage(message);
   }
 
   return fallback;
@@ -785,6 +796,60 @@ export default function InstructorCourseDetailPage() {
       setWeekMessage("Week could not be deleted.");
     } finally {
       setDeletingWeekId(null);
+    }
+  };
+
+  const handleDeleteSelectedResources = async () => {
+    const selectedResourceFiles = resourceFiles.filter(
+      (file) => selectedFiles.has(file.id) && file.isAiResource
+    );
+
+    if (selectedResourceFiles.length === 0) {
+      setResourceUploadError("Only AI-indexed PDF resources can be deleted from this list.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${selectedResourceFiles.length} selected AI document(s)? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    const selectedIds = new Set(selectedResourceFiles.map((file) => file.id));
+
+    setDeletingResourceIds((current) => {
+      const next = new Set(current);
+      selectedIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setResourceUploadError("");
+    setResourceUploadMessage("");
+
+    try {
+      await Promise.all(
+        selectedResourceFiles.map((file) =>
+          aiService.deleteCourseResource(courseId, file.id)
+        )
+      );
+
+      setAiResources((current) =>
+        current.filter((resource) => !selectedIds.has(resource.resourceId))
+      );
+      setSelectedFiles(new Set());
+      setAiSummary(null);
+      setResourceUploadMessage(
+        `${selectedResourceFiles.length} document(s) deleted.`
+      );
+    } catch (error) {
+      setResourceUploadError(
+        getApiErrorMessage(error, "Selected documents could not be deleted.")
+      );
+    } finally {
+      setDeletingResourceIds((current) => {
+        const next = new Set(current);
+        selectedIds.forEach((id) => next.delete(id));
+        return next;
+      });
     }
   };
 
@@ -1834,17 +1899,25 @@ export default function InstructorCourseDetailPage() {
                       onSubmit={handleResourceUpload}
                       className="flex flex-col gap-3 sm:flex-row sm:items-center"
                     >
-                      <input
-                        type="file"
-                        accept="application/pdf,.pdf"
-                        disabled={uploadingResource}
-                        onChange={(event) => {
-                          setSelectedUploadFile(event.target.files?.[0] ?? null);
-                          setResourceUploadError("");
-                          setResourceUploadMessage("");
-                        }}
-                        className="max-w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
+                      <div className="flex min-w-0 items-center overflow-hidden rounded-lg border border-slate-300 bg-white text-sm text-slate-700">
+                        <label className="shrink-0 cursor-pointer bg-slate-100 px-4 py-2 font-medium text-slate-700 transition hover:bg-slate-200">
+                          Choose File
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            disabled={uploadingResource}
+                            onChange={(event) => {
+                              setSelectedUploadFile(event.target.files?.[0] ?? null);
+                              setResourceUploadError("");
+                              setResourceUploadMessage("");
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                        <span className="truncate px-3 text-slate-500">
+                          {selectedUploadFile?.name || "No file chosen"}
+                        </span>
+                      </div>
                       <button
                         type="submit"
                         disabled={!selectedUploadFile || uploadingResource}
@@ -1898,11 +1971,12 @@ export default function InstructorCourseDetailPage() {
 
                     <button
                       type="button"
+                      onClick={handleDeleteSelectedResources}
                       disabled={selectedFiles.size === 0}
-                      className="flex items-center gap-2 rounded-lg border-2 border-blue-500 px-4 py-2 font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex items-center gap-2 rounded-lg border-2 border-red-500 px-4 py-2 font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Download className="h-4 w-4" />
-                      <span>Download ({selectedFiles.size})</span>
+                      <Trash2 className="h-4 w-4" />
+                      <span>Delete Selected ({selectedFiles.size})</span>
                     </button>
 
                     <div className="relative">
