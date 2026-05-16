@@ -15,6 +15,18 @@ import {
   XCircle,
 } from "lucide-react";
 
+const formatAiErrorMessage = (message: string) => {
+  if (
+    message.includes("AI provider is not reachable") ||
+    message.includes("AI_BASE_URL") ||
+    message.includes("local model server")
+  ) {
+    return "AI indexing is not available right now. Please start the AI service and upload again.";
+  }
+
+  return message;
+};
+
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (
     error &&
@@ -25,7 +37,7 @@ const getApiErrorMessage = (error: unknown, fallback: string) => {
   ) {
     const message = (error as { response: { data: { message: unknown } } })
       .response.data.message;
-    if (typeof message === "string") return message;
+    if (typeof message === "string") return formatAiErrorMessage(message);
   }
 
   return fallback;
@@ -210,17 +222,23 @@ export default function ManageSyllabusDocumentsPage() {
                     <UploadCloud className="h-5 w-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <input
-                      type="file"
-                      accept="application/pdf,.pdf"
-                      disabled={uploading}
-                      onChange={handleFileChange}
-                      className="w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    />
+                    <div className="flex min-w-0 items-center overflow-hidden rounded-lg border border-slate-300 bg-white text-sm text-slate-700">
+                      <label className="shrink-0 cursor-pointer bg-slate-100 px-4 py-2 font-medium text-slate-700 transition hover:bg-slate-200">
+                        Choose File
+                        <input
+                          type="file"
+                          accept="application/pdf,.pdf"
+                          disabled={uploading}
+                          onChange={handleFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                      <span className="truncate px-3 text-slate-500">
+                        {selectedFile?.name || "No file chosen"}
+                      </span>
+                    </div>
                     <p className="mt-2 truncate text-xs text-slate-500">
-                      {selectedFile
-                        ? selectedFile.name
-                        : "Upload a text-based syllabus PDF."}
+                      Upload a text-based syllabus PDF.
                     </p>
                   </div>
                 </div>

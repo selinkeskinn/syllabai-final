@@ -43,6 +43,8 @@ import {
   announcementService,
 } from "@/services/announcement.service";
 import { courseService } from "@/services/course.service";
+import NotificationBell from "@/components/NotificationBell";
+import SettingsButton from "@/components/SettingsButton";
 import {
   getSyllabusDescriptionText,
   getSyllabusDocumentMetadata,
@@ -613,21 +615,8 @@ export default function CourseDetailPage() {
                     Academic Week: {loadingSyllabus ? "..." : syllabusWeeks.length}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  aria-label="Notifications"
-                  className="relative rounded-lg p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                >
-                  <Bell className="h-5 w-5" />
-                  <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Settings"
-                  className="rounded-lg p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                >
-                  <Settings className="h-5 w-5" />
-                </button>
+                <NotificationBell />
+                <SettingsButton href="/settings" />
               </div>
             </div>
           </div>

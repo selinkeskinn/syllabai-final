@@ -21,6 +21,8 @@ type LayoutProps = {
 type StoredUser = {
   name?: string;
   email?: string;
+  role?: string;
+  avatarUrl?: string | null;
 };
 
 type NavItem = {
@@ -42,6 +44,18 @@ const getInitials = (value?: string) => {
     .toUpperCase();
 };
 
+const getAvatarUrl = (value?: string | null) => {
+  if (!value) return "";
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+  const serverBase = apiBase.replace(/\/api\/?$/, "");
+  return `${serverBase}${value.startsWith("/") ? value : `/${value}`}`;
+};
+
 const navItems = [
   { label: "Student Dashboard", href: "/dashboard", icon: LayoutGrid },
   { label: "My Courses", href: "/courses", icon: BookOpen },
@@ -54,28 +68,71 @@ export default function Layout({ children }: LayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [storedUser, setStoredUser] = useState<StoredUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
+    const token = localStorage.getItem("token");
     const rawUser = localStorage.getItem("user");
 
-    if (!rawUser) {
-      setStoredUser(null);
+    if (!token || !rawUser) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
       return;
     }
 
     try {
-      setStoredUser(JSON.parse(rawUser) as StoredUser);
+      const parsedUser = JSON.parse(rawUser) as StoredUser;
+
+      if (parsedUser.role === "INSTRUCTOR") {
+        router.replace("/instructor/dashboard");
+        return;
+      }
+
+      if (parsedUser.role && parsedUser.role !== "STUDENT") {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        router.replace("/");
+        return;
+      }
+
+      setStoredUser(parsedUser);
+      setAuthChecked(true);
+
+      const refreshStoredUser = () => {
+        const updatedRawUser = localStorage.getItem("user");
+        if (!updatedRawUser) return;
+
+        try {
+          setStoredUser(JSON.parse(updatedRawUser) as StoredUser);
+        } catch {
+          // Ignore malformed local storage updates.
+        }
+      };
+
+      window.addEventListener("user-updated", refreshStoredUser);
+      return () => window.removeEventListener("user-updated", refreshStoredUser);
     } catch (error) {
-      console.error("Student layout user parse error:", error);
-      setStoredUser(null);
+      console.error("Student layout auth check error:", error);
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
     }
-  }, []);
+  }, [router]);
 
   const handleSignOut = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     router.push("/");
   };
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f6f8fc]">
@@ -122,21 +179,32 @@ export default function Layout({ children }: LayoutProps) {
           </nav>
 
           <div className="hidden border-t border-slate-200 p-4 lg:block">
-            <div className="rounded-[28px] bg-[#f2f6ff] p-4">
+            <Link
+              href="/settings"
+              className="block rounded-[28px] bg-[#f2f6ff] p-4 transition hover:bg-blue-50"
+            >
               <div className="flex items-center gap-4">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-xl font-semibold text-white">
-                  {getInitials(storedUser?.name)}
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-xl font-semibold text-white">
+                  {getAvatarUrl(storedUser?.avatarUrl) ? (
+                    <img
+                      src={getAvatarUrl(storedUser?.avatarUrl)}
+                      alt={storedUser?.name || "Profile photo"}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    getInitials(storedUser?.name)
+                  )}
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-xl font-semibold text-slate-900">
                     {storedUser?.name || "Student User"}
                   </p>
                   <p className="truncate text-sm text-slate-500">
-                    {storedUser?.email || "student@syllabai.local"}
+                    {storedUser?.email || "No email"}
                   </p>
                 </div>
               </div>
-            </div>
+            </Link>
 
             <button
               onClick={handleSignOut}

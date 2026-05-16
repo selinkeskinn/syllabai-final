@@ -1,26 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import InstructorLayout from "@/components/InstructorLayout";
+import NotificationBell from "@/components/NotificationBell";
+import SettingsButton from "@/components/SettingsButton";
 import {
   Announcement,
   announcementService,
 } from "@/services/announcement.service";
+import { courseService } from "@/services/course.service";
 import {
-  Bell,
   Calendar,
   Edit2,
   Filter,
   Plus,
-  Settings,
+  Trash2,
   X,
 } from "lucide-react";
 
 type AnnouncementFilter = "all" | "urgent" | "events" | "info";
 
+type CourseOption = {
+  id: string;
+  code?: string;
+  title?: string;
+};
+
+type AnnouncementFormState = {
+  courseId: string;
+  title: string;
+  content: string;
+  type: string;
+};
+
+const emptyForm: AnnouncementFormState = {
+  courseId: "",
+  title: "",
+  content: "",
+  type: "INFO",
+};
+
 const formatAnnouncementType = (type?: string | null) => {
   if (!type) return "INFO";
-
   return type.toUpperCase();
 };
 
@@ -47,7 +68,6 @@ const formatDateTime = (value?: string | null) => {
 
 const getContentPreview = (content?: string | null) => {
   if (!content) return "";
-
   return content.length > 190 ? `${content.slice(0, 190)}...` : content;
 };
 
@@ -55,7 +75,6 @@ const getCourseLabel = (announcement: Announcement) => {
   if (announcement.course?.code) return announcement.course.code;
   if (announcement.course?.title) return announcement.course.title;
   if (announcement.courseId) return "Course";
-
   return "Course";
 };
 
@@ -67,7 +86,6 @@ const getAnnouncementStyles = (type?: string | null) => {
       card: "border-red-100 bg-red-50",
       stripe: "bg-red-500",
       badge: "border-red-500 text-red-500",
-      chip: "text-red-500",
     };
   }
 
@@ -76,7 +94,6 @@ const getAnnouncementStyles = (type?: string | null) => {
       card: "border-yellow-100 bg-yellow-50",
       stripe: "bg-orange-500",
       badge: "border-orange-500 text-orange-500",
-      chip: "text-orange-500",
     };
   }
 
@@ -84,32 +101,47 @@ const getAnnouncementStyles = (type?: string | null) => {
     card: "border-blue-100 bg-blue-50",
     stripe: "bg-blue-500",
     badge: "border-blue-500 text-blue-500",
-    chip: "text-blue-500",
   };
 };
 
 export default function InstructorAnnouncementsPage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [courses, setCourses] = useState<CourseOption[]>([]);
   const [activeFilter, setActiveFilter] = useState<AnnouncementFilter>("all");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
-  const [showNewAnnouncementModal, setShowNewAnnouncementModal] =
-    useState(false);
+  const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
+  const [editingAnnouncement, setEditingAnnouncement] =
+    useState<Announcement | null>(null);
+  const [form, setForm] = useState<AnnouncementFormState>(emptyForm);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | number | null>(null);
+  const [message, setMessage] = useState("");
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setMessage("");
+
+      const [announcementData, courseData] = await Promise.all([
+        announcementService.getAllAnnouncements(),
+        courseService.getAllCourses(),
+      ]);
+
+      setAnnouncements(Array.isArray(announcementData) ? announcementData : []);
+      setCourses(Array.isArray(courseData) ? courseData : []);
+    } catch (error) {
+      console.error("Instructor announcements fetch error:", error);
+      setMessage("Announcements could not be loaded.");
+      setAnnouncements([]);
+      setCourses([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchAnnouncements = async () => {
-      try {
-        const data = await announcementService.getAllAnnouncements();
-        setAnnouncements(Array.isArray(data) ? data : []);
-      } catch (error) {
-        console.error("Instructor announcements fetch error:", error);
-        setAnnouncements([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchAnnouncements();
+    fetchData();
   }, []);
 
   const filteredAnnouncements = useMemo(() => {
@@ -163,6 +195,113 @@ export default function InstructorAnnouncementsPage() {
     },
   ];
 
+  const openCreateModal = () => {
+    setEditingAnnouncement(null);
+    setForm({
+      ...emptyForm,
+      courseId: courses[0]?.id || "",
+    });
+    setMessage("");
+    setShowAnnouncementModal(true);
+  };
+
+  const openEditModal = (announcement: Announcement) => {
+    setEditingAnnouncement(announcement);
+    setForm({
+      courseId: announcement.courseId || "",
+      title: announcement.title || "",
+      content: announcement.content || "",
+      type: announcement.type?.toUpperCase() || "INFO",
+    });
+    setMessage("");
+    setShowAnnouncementModal(true);
+  };
+
+  const closeModal = () => {
+    if (saving) return;
+    setShowAnnouncementModal(false);
+    setEditingAnnouncement(null);
+    setForm(emptyForm);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!form.courseId) {
+      setMessage("Please select a course.");
+      return;
+    }
+
+    if (!form.title.trim() || !form.content.trim()) {
+      setMessage("Title and content are required.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setMessage("");
+
+      const basePayload = {
+        title: form.title.trim(),
+        content: form.content.trim(),
+        type: form.type || "INFO",
+      };
+
+      if (editingAnnouncement?.id) {
+        const updated = await announcementService.updateAnnouncement(
+          editingAnnouncement.id,
+          basePayload
+        );
+
+        setAnnouncements((prev) =>
+          prev.map((item) => (item.id === updated.id ? updated : item))
+        );
+        setMessage("Announcement updated successfully.");
+      } else {
+        const created = await announcementService.createAnnouncement({
+          courseId: form.courseId,
+          ...basePayload,
+        });
+        setAnnouncements((prev) => [created, ...prev]);
+        setMessage("Announcement created successfully.");
+      }
+
+      closeModal();
+    } catch (error) {
+      console.error("Announcement save error:", error);
+      setMessage("Announcement could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (announcement: Announcement) => {
+    if (!announcement.id) return;
+
+    const confirmed = window.confirm(
+      `Delete "${announcement.title || "this announcement"}"? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(announcement.id);
+      setMessage("");
+
+      await announcementService.deleteAnnouncement(announcement.id);
+
+      setAnnouncements((prev) =>
+        prev.filter((item) => item.id !== announcement.id)
+      );
+      setMessage("Announcement deleted successfully.");
+    } catch (error) {
+      console.error("Announcement delete error:", error);
+      setMessage("Announcement could not be deleted.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <InstructorLayout>
       <div className="min-h-screen bg-slate-50">
@@ -175,24 +314,13 @@ export default function InstructorAnnouncementsPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-[rgb(109,156,245)]">
-                  Academic Week: 8
+                  Academic Week
                 </span>
               </div>
 
-              <button
-                type="button"
-                className="relative rounded-lg p-2.5 transition-colors hover:bg-slate-100"
-              >
-                <Bell className="h-5 w-5 text-slate-600" />
-                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-              </button>
+              <NotificationBell />
 
-              <button
-                type="button"
-                className="rounded-lg p-2.5 transition-colors hover:bg-slate-100"
-              >
-                <Settings className="h-5 w-5 text-slate-600" />
-              </button>
+              <SettingsButton href="/instructor/settings" />
             </div>
           </div>
         </header>
@@ -204,6 +332,12 @@ export default function InstructorAnnouncementsPage() {
               notices.
             </p>
           </div>
+
+          {message ? (
+            <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700">
+              {message}
+            </div>
+          ) : null}
 
           <div className="mb-8 flex items-center justify-between gap-4">
             <div className="flex flex-wrap gap-3">
@@ -222,7 +356,7 @@ export default function InstructorAnnouncementsPage() {
             <div className="relative flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => setShowNewAnnouncementModal(true)}
+                onClick={openCreateModal}
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
               >
                 <Plus className="h-4 w-4" />
@@ -333,13 +467,28 @@ export default function InstructorAnnouncementsPage() {
                           </span>
                         </div>
 
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                          Edit
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(announcement)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                            Edit
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(announcement)}
+                            disabled={deletingId === announcement.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {deletingId === announcement.id
+                              ? "Deleting..."
+                              : "Delete"}
+                          </button>
+                        </div>
                       </div>
 
                       <h2 className="text-xl font-semibold text-slate-900">
@@ -364,17 +513,22 @@ export default function InstructorAnnouncementsPage() {
           )}
         </main>
 
-        {showNewAnnouncementModal ? (
+        {showAnnouncementModal ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
-            <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl">
+            <form
+              onSubmit={handleSubmit}
+              className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl"
+            >
               <div className="mb-5 flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-slate-900">
-                  Add New Announcement
+                  {editingAnnouncement
+                    ? "Edit Announcement"
+                    : "Add New Announcement"}
                 </h3>
 
                 <button
                   type="button"
-                  onClick={() => setShowNewAnnouncementModal(false)}
+                  onClick={closeModal}
                   className="rounded-lg p-2 transition-colors hover:bg-slate-100"
                 >
                   <X className="h-5 w-5 text-slate-500" />
@@ -384,10 +538,41 @@ export default function InstructorAnnouncementsPage() {
               <div className="space-y-4">
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
+                    Course
+                  </label>
+                  <select
+                    value={form.courseId}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        courseId: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="">Select course</option>
+                    {courses.map((course) => (
+                      <option key={course.id} value={course.id}>
+                        {course.code ? `${course.code} - ` : ""}
+                        {course.title || "Untitled Course"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
                     Title
                   </label>
                   <input
                     type="text"
+                    value={form.title}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        title: event.target.value,
+                      }))
+                    }
                     placeholder="Announcement title"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                   />
@@ -397,10 +582,19 @@ export default function InstructorAnnouncementsPage() {
                   <label className="mb-1 block text-sm font-medium text-slate-700">
                     Type
                   </label>
-                  <select className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100">
-                    <option value="info">Info</option>
-                    <option value="urgent">Urgent</option>
-                    <option value="event">Event</option>
+                  <select
+                    value={form.type}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        type: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="INFO">Info</option>
+                    <option value="URGENT">Urgent</option>
+                    <option value="EVENT">Event</option>
                   </select>
                 </div>
 
@@ -410,6 +604,13 @@ export default function InstructorAnnouncementsPage() {
                   </label>
                   <textarea
                     rows={5}
+                    value={form.content}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        content: event.target.value,
+                      }))
+                    }
                     placeholder="Write announcement details..."
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                   />
@@ -418,22 +619,26 @@ export default function InstructorAnnouncementsPage() {
                 <div className="flex justify-end gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowNewAnnouncementModal(false)}
+                    onClick={closeModal}
                     className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
                     Cancel
                   </button>
 
                   <button
-                    type="button"
-                    onClick={() => setShowNewAnnouncementModal(false)}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    Publish
+                    {saving
+                      ? "Saving..."
+                      : editingAnnouncement
+                      ? "Update Announcement"
+                      : "Create Announcement"}
                   </button>
                 </div>
               </div>
-            </div>
+            </form>
           </div>
         ) : null}
       </div>

@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import InstructorLayout from "@/components/InstructorLayout";
 import { FeedbackItem, getFeedback } from "@/services/feedback.service";
+import NotificationBell from "@/components/NotificationBell";
+import SettingsButton from "@/components/SettingsButton";
 import {
-  Bell,
-  Binary,
+Binary,
   Brain,
   Database,
   Globe,
@@ -112,14 +113,15 @@ function formatDate(value?: string) {
 
 function getStudentName(item: FeedbackItem, index: number) {
   const extended = item as FeedbackItem & {
-    anonymous?: boolean;
     user?: {
       name?: string | null;
       email?: string | null;
     } | null;
   };
 
-  if (extended.anonymous) return "Anonymous Student";
+  if (item.userId === null) {
+    return "Anonymous Feedback";
+  }
 
   return (
     extended.user?.name ||
@@ -129,7 +131,7 @@ function getStudentName(item: FeedbackItem, index: number) {
 }
 
 function getInitials(name: string) {
-  if (name === "Anonymous Student") return "?";
+  if (name === "Anonymous Feedback") return "AN";
 
   const initials = name
     .split(" ")
@@ -198,24 +200,13 @@ export default function InstructorFeedbackPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-blue-500">
-                  Academic Week: 8
+                  Academic Week
                 </span>
               </div>
 
-              <button
-                type="button"
-                className="relative rounded-lg p-2.5 transition hover:bg-slate-100"
-              >
-                <Bell className="h-5 w-5 text-slate-600" />
-                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-              </button>
+              <NotificationBell />
 
-              <button
-                type="button"
-                className="rounded-lg p-2.5 transition hover:bg-slate-100"
-              >
-                <Settings className="h-5 w-5 text-slate-600" />
-              </button>
+              <SettingsButton href="/instructor/settings" />
             </div>
           </div>
         </header>

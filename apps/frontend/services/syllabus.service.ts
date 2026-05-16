@@ -45,6 +45,13 @@ export type UpdateSyllabusPayload = {
   resources?: string;
 };
 
+export type SyllabusWeekPayload = {
+  weekNo: number;
+  topic: string;
+  details?: string;
+  todo?: string;
+};
+
 export type SyllabusDocumentMetadata = {
   fileName: string | null;
   storedFileName: string | null;
@@ -158,6 +165,31 @@ export const syllabusService = {
       },
     });
 
+    return response.data;
+  },
+
+  async createWeek(
+    syllabusId: string,
+    payload: SyllabusWeekPayload
+  ): Promise<SyllabusWeek> {
+    const response = await api.post(`/syllabi/${syllabusId}/weeks`, payload);
+    return response.data;
+  },
+
+  async updateWeek(
+    syllabusId: string,
+    weekId: string,
+    payload: Partial<SyllabusWeekPayload>
+  ): Promise<SyllabusWeek> {
+    const response = await api.put(
+      `/syllabi/${syllabusId}/weeks/${weekId}`,
+      payload
+    );
+    return response.data;
+  },
+
+  async deleteWeek(syllabusId: string, weekId: string) {
+    const response = await api.delete(`/syllabi/${syllabusId}/weeks/${weekId}`);
     return response.data;
   },
 };

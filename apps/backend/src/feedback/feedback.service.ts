@@ -6,13 +6,14 @@ import { CreateFeedbackDto } from './dto/create-feedback.dto';
 export class FeedbackService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(data: CreateFeedbackDto) {
+  async create(data: CreateFeedbackDto, userId?: string) {
     return this.prisma.feedback.create({
       data: {
         courseId: data.courseId,
+        userId: data.isAnonymous ? null : userId,
         rating: data.rating,
         tags: data.tags,
-        comment: data.comment,
+        comment: data.comment?.trim() || null,
       },
       include: {
         course: {
@@ -20,6 +21,15 @@ export class FeedbackService {
             id: true,
             code: true,
             title: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            firstName: true,
+            lastName: true,
+            email: true,
           },
         },
       },
@@ -38,6 +48,15 @@ export class FeedbackService {
             id: true,
             code: true,
             title: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            firstName: true,
+            lastName: true,
+            email: true,
           },
         },
       },

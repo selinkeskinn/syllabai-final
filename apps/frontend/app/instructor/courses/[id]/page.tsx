@@ -17,6 +17,8 @@ import {
   syllabusService,
 } from "@/services/syllabus.service";
 import { api } from "@/lib/api";
+import NotificationBell from "@/components/NotificationBell";
+import SettingsButton from "@/components/SettingsButton";
 import {
   ArrowLeft,
   AlertCircle,
@@ -25,7 +27,6 @@ import {
   Calendar,
   CheckCircle2,
   ChevronDown,
-  Download,
   Edit2,
   FileText,
   KeyRound,
@@ -117,6 +118,20 @@ type DisplayWeek = {
   topic: string;
   details?: string | null;
   todo?: string | null;
+};
+
+type WeekFormState = {
+  weekNo: string;
+  topic: string;
+  details: string;
+  todo: string;
+};
+
+const emptyWeekForm: WeekFormState = {
+  weekNo: "",
+  topic: "",
+  details: "",
+  todo: "",
 };
 
 type GradingPieLabelProps = {
@@ -310,6 +325,18 @@ const getResourceStatusLabel = (status: ResourceFile["status"]) => {
   return "Document";
 };
 
+const formatAiErrorMessage = (message: string) => {
+  if (
+    message.includes("AI provider is not reachable") ||
+    message.includes("AI_BASE_URL") ||
+    message.includes("local model server")
+  ) {
+    return "AI indexing is not available right now. Please start the AI service and upload again.";
+  }
+
+  return message;
+};
+
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (
     error &&
@@ -320,7 +347,7 @@ const getApiErrorMessage = (error: unknown, fallback: string) => {
   ) {
     const message = (error as { response: { data: { message: unknown } } })
       .response.data.message;
-    if (typeof message === "string") return message;
+    if (typeof message === "string") return formatAiErrorMessage(message);
   }
 
   return fallback;
@@ -443,6 +470,12 @@ export default function InstructorCourseDetailPage() {
     null
   );
   const [loadingAiSummary, setLoadingAiSummary] = useState(false);
+  const [showWeekModal, setShowWeekModal] = useState(false);
+  const [editingWeek, setEditingWeek] = useState<DisplayWeek | null>(null);
+  const [weekForm, setWeekForm] = useState<WeekFormState>(emptyWeekForm);
+  const [savingWeek, setSavingWeek] = useState(false);
+  const [deletingWeekId, setDeletingWeekId] = useState<string | null>(null);
+  const [weekMessage, setWeekMessage] = useState("");
 
   const handleCopyJoinKey = async () => {
     if (!course?.joinKey) return;
@@ -605,6 +638,220 @@ export default function InstructorCourseDetailPage() {
         details: week.details,
         todo: week.todo,
       }));
+
+  const syncWeekState = (weeks: DisplayWeek[]) => {
+    const sortedWeeks = [...weeks].sort((a, b) => a.weekNo - b.weekNo);
+
+    setSyllabus((prev) =>
+      prev
+        ? {
+            ...prev,
+            weeks: sortedWeeks,
+          }
+        : prev
+    );
+
+    setCourse((prev) =>
+      prev?.syllabus
+        ? {
+            ...prev,
+            syllabus: {
+              ...prev.syllabus,
+              weeks: sortedWeeks,
+            },
+          }
+        : prev
+    );
+  };
+
+  const openCreateWeekModal = () => {
+    if (!resolvedSyllabus?.id) {
+      setWeekMessage("Create or upload a syllabus before adding weekly topics.");
+      return;
+    }
+
+    const nextWeekNo =
+      displayedWeeks.length > 0
+        ? Math.max(...displayedWeeks.map((week) => week.weekNo)) + 1
+        : 1;
+
+    setEditingWeek(null);
+    setWeekForm({
+      ...emptyWeekForm,
+      weekNo: String(nextWeekNo),
+    });
+    setWeekMessage("");
+    setShowWeekModal(true);
+  };
+
+  const openEditWeekModal = (week: DisplayWeek) => {
+    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
+      setWeekMessage("AI generated weeks cannot be edited directly.");
+      return;
+    }
+
+    setEditingWeek(week);
+    setWeekForm({
+      weekNo: String(week.weekNo),
+      topic: week.topic || "",
+      details: week.details || "",
+      todo: week.todo || "",
+    });
+    setWeekMessage("");
+    setShowWeekModal(true);
+  };
+
+  const closeWeekModal = () => {
+    if (savingWeek) return;
+    setShowWeekModal(false);
+    setEditingWeek(null);
+    setWeekForm(emptyWeekForm);
+  };
+
+  const handleWeekSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!resolvedSyllabus?.id) {
+      setWeekMessage("Create or upload a syllabus before saving weeks.");
+      return;
+    }
+
+    const parsedWeekNo = Number(weekForm.weekNo);
+
+    if (!Number.isInteger(parsedWeekNo) || parsedWeekNo < 1) {
+      setWeekMessage("Week number must be a positive number.");
+      return;
+    }
+
+    if (!weekForm.topic.trim()) {
+      setWeekMessage("Topic is required.");
+      return;
+    }
+
+    try {
+      setSavingWeek(true);
+      setWeekMessage("");
+
+      const payload = {
+        weekNo: parsedWeekNo,
+        topic: weekForm.topic.trim(),
+        details: weekForm.details.trim() || undefined,
+        todo: weekForm.todo.trim() || undefined,
+      };
+
+      if (editingWeek) {
+        const updated = await syllabusService.updateWeek(
+          resolvedSyllabus.id,
+          editingWeek.id,
+          payload
+        );
+
+        syncWeekState(
+          displayedWeeks.map((week) =>
+            week.id === updated.id ? updated : week
+          )
+        );
+        setWeekMessage("Week updated successfully.");
+      } else {
+        const created = await syllabusService.createWeek(
+          resolvedSyllabus.id,
+          payload
+        );
+
+        syncWeekState([...displayedWeeks, created]);
+        setWeekMessage("Week added successfully.");
+      }
+
+      closeWeekModal();
+    } catch (error) {
+      console.error("Week save error:", error);
+      setWeekMessage("Week could not be saved.");
+    } finally {
+      setSavingWeek(false);
+    }
+  };
+
+  const handleDeleteWeek = async (week: DisplayWeek) => {
+    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
+      setWeekMessage("AI generated weeks cannot be deleted directly.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete Week ${week.weekNo}? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingWeekId(week.id);
+      setWeekMessage("");
+
+      await syllabusService.deleteWeek(resolvedSyllabus.id, week.id);
+
+      syncWeekState(displayedWeeks.filter((item) => item.id !== week.id));
+      setWeekMessage("Week deleted successfully.");
+    } catch (error) {
+      console.error("Week delete error:", error);
+      setWeekMessage("Week could not be deleted.");
+    } finally {
+      setDeletingWeekId(null);
+    }
+  };
+
+  const handleDeleteSelectedResources = async () => {
+    const selectedResourceFiles = resourceFiles.filter(
+      (file) => selectedFiles.has(file.id) && file.isAiResource
+    );
+
+    if (selectedResourceFiles.length === 0) {
+      setResourceUploadError("Only AI-indexed PDF resources can be deleted from this list.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${selectedResourceFiles.length} selected AI document(s)? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    const selectedIds = new Set(selectedResourceFiles.map((file) => file.id));
+
+    setDeletingResourceIds((current) => {
+      const next = new Set(current);
+      selectedIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setResourceUploadError("");
+    setResourceUploadMessage("");
+
+    try {
+      await Promise.all(
+        selectedResourceFiles.map((file) =>
+          aiService.deleteCourseResource(courseId, file.id)
+        )
+      );
+
+      setAiResources((current) =>
+        current.filter((resource) => !selectedIds.has(resource.resourceId))
+      );
+      setSelectedFiles(new Set());
+      setAiSummary(null);
+      setResourceUploadMessage(
+        `${selectedResourceFiles.length} document(s) deleted.`
+      );
+    } catch (error) {
+      setResourceUploadError(
+        getApiErrorMessage(error, "Selected documents could not be deleted.")
+      );
+    } finally {
+      setDeletingResourceIds((current) => {
+        const next = new Set(current);
+        selectedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  };
 
   const resourceFiles: ResourceFile[] = [
     ...aiResources.map((resource) => ({
@@ -941,20 +1188,9 @@ export default function InstructorCourseDetailPage() {
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    className="relative rounded-lg p-2.5 transition-colors hover:bg-slate-100"
-                  >
-                    <Bell className="h-5 w-5 text-slate-600" />
-                    <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-                  </button>
+                  <NotificationBell />
 
-                  <button
-                    type="button"
-                    className="rounded-lg p-2.5 transition-colors hover:bg-slate-100"
-                  >
-                    <Settings className="h-5 w-5 text-slate-600" />
-                  </button>
+                  <SettingsButton href="/instructor/settings" />
                 </div>
               </div>
             </header>
@@ -1476,14 +1712,31 @@ export default function InstructorCourseDetailPage() {
                       </p>
                     </div>
 
-                    <Link
-                      href={`/instructor/courses/${course.id}/syllabus/edit`}
-                      className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
-                    >
-                      <FileText className="h-4 w-4" />
-                      <span className="text-sm font-medium">Manage PDFs</span>
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={openCreateWeekModal}
+                        className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span className="text-sm font-medium">Add Week</span>
+                      </button>
+
+                      <Link
+                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                        className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
+                      >
+                        <FileText className="h-4 w-4" />
+                        <span className="text-sm font-medium">Manage PDFs</span>
+                      </Link>
+                    </div>
                   </div>
+
+                  {weekMessage ? (
+                    <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700">
+                      {weekMessage}
+                    </div>
+                  ) : null}
 
                   {loadingSyllabus || loadingAiSummary ? (
                     <div className="p-8 text-sm text-slate-500">
@@ -1510,6 +1763,9 @@ export default function InstructorCourseDetailPage() {
                               </th>
                               <th className="px-6 py-4 text-left text-sm font-semibold text-slate-700">
                                 Assignment/Deadline
+                              </th>
+                              <th className="w-36 px-6 py-4 text-right text-sm font-semibold text-slate-700">
+                                Actions
                               </th>
                             </tr>
                           </thead>
@@ -1555,6 +1811,33 @@ export default function InstructorCourseDetailPage() {
                                       className={`px-6 py-5 text-sm ${tone.assignment}`}
                                     >
                                       {week.details || "—"}
+                                    </td>
+
+                                    <td className="px-6 py-5 text-right">
+                                      <div className="flex justify-end gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditWeekModal(week)}
+                                          disabled={String(week.id).startsWith("ai-week-")}
+                                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                          <Edit2 className="h-3.5 w-3.5" />
+                                          Edit
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteWeek(week)}
+                                          disabled={
+                                            deletingWeekId === week.id ||
+                                            String(week.id).startsWith("ai-week-")
+                                          }
+                                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                          {deletingWeekId === week.id ? "Deleting..." : "Delete"}
+                                        </button>
+                                      </div>
                                     </td>
                                   </tr>
                                 );
@@ -1616,17 +1899,25 @@ export default function InstructorCourseDetailPage() {
                       onSubmit={handleResourceUpload}
                       className="flex flex-col gap-3 sm:flex-row sm:items-center"
                     >
-                      <input
-                        type="file"
-                        accept="application/pdf,.pdf"
-                        disabled={uploadingResource}
-                        onChange={(event) => {
-                          setSelectedUploadFile(event.target.files?.[0] ?? null);
-                          setResourceUploadError("");
-                          setResourceUploadMessage("");
-                        }}
-                        className="max-w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
+                      <div className="flex min-w-0 items-center overflow-hidden rounded-lg border border-slate-300 bg-white text-sm text-slate-700">
+                        <label className="shrink-0 cursor-pointer bg-slate-100 px-4 py-2 font-medium text-slate-700 transition hover:bg-slate-200">
+                          Choose File
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            disabled={uploadingResource}
+                            onChange={(event) => {
+                              setSelectedUploadFile(event.target.files?.[0] ?? null);
+                              setResourceUploadError("");
+                              setResourceUploadMessage("");
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                        <span className="truncate px-3 text-slate-500">
+                          {selectedUploadFile?.name || "No file chosen"}
+                        </span>
+                      </div>
                       <button
                         type="submit"
                         disabled={!selectedUploadFile || uploadingResource}
@@ -1680,11 +1971,12 @@ export default function InstructorCourseDetailPage() {
 
                     <button
                       type="button"
+                      onClick={handleDeleteSelectedResources}
                       disabled={selectedFiles.size === 0}
-                      className="flex items-center gap-2 rounded-lg border-2 border-blue-500 px-4 py-2 font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex items-center gap-2 rounded-lg border-2 border-red-500 px-4 py-2 font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Download className="h-4 w-4" />
-                      <span>Download ({selectedFiles.size})</span>
+                      <Trash2 className="h-4 w-4" />
+                      <span>Delete Selected ({selectedFiles.size})</span>
                     </button>
 
                     <div className="relative">
@@ -2239,6 +2531,121 @@ export default function InstructorCourseDetailPage() {
             </main>
           </>
         )}
+      {showWeekModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <form
+            onSubmit={handleWeekSubmit}
+            className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900">
+                {editingWeek ? "Edit Week" : "Add Week"}
+              </h3>
+
+              <button
+                type="button"
+                onClick={closeWeekModal}
+                className="rounded-lg p-2 transition hover:bg-slate-100"
+              >
+                <XCircle className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Week Number
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={weekForm.weekNo}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      weekNo: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Topic
+                </label>
+                <input
+                  type="text"
+                  value={weekForm.topic}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      topic: event.target.value,
+                    }))
+                  }
+                  placeholder="Weekly topic"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  To Do
+                </label>
+                <textarea
+                  rows={3}
+                  value={weekForm.todo}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      todo: event.target.value,
+                    }))
+                  }
+                  placeholder="Student tasks or preparation notes"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Assignment / Deadline
+                </label>
+                <textarea
+                  rows={3}
+                  value={weekForm.details}
+                  onChange={(event) =>
+                    setWeekForm((prev) => ({
+                      ...prev,
+                      details: event.target.value,
+                    }))
+                  }
+                  placeholder="Assignment, exam, quiz, or deadline details"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeWeekModal}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={savingWeek}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingWeek ? "Saving..." : "Save Week"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
       </div>
     </InstructorLayout>
   );

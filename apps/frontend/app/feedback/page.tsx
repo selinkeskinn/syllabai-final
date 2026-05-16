@@ -4,9 +4,10 @@ import Layout from "@/components/Layout";
 import { useEffect, useState } from "react";
 import { submitFeedback } from "@/services/feedback.service";
 import { CourseSummary, courseService } from "@/services/course.service";
+import NotificationBell from "@/components/NotificationBell";
+import SettingsButton from "@/components/SettingsButton";
 import {
-  Bell,
-  Binary,
+Binary,
   Brain,
   Database,
   Globe,
@@ -61,6 +62,7 @@ export default function FeedbackPage() {
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [ratings, setRatings] = useState<Record<string, number>>({});
   const [selectedTags, setSelectedTags] = useState<Record<string, string[]>>({});
+  const [comments, setComments] = useState<Record<string, string>>({});
   const [anonymous, setAnonymous] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [submittingCourseId, setSubmittingCourseId] = useState<string | null>(
@@ -115,6 +117,13 @@ export default function FeedbackPage() {
     }));
   };
 
+  const setComment = (courseId: string, value: string) => {
+    setComments((prev) => ({
+      ...prev,
+      [courseId]: value,
+    }));
+  };
+
   const handleSubmit = async (course: CourseSummary) => {
     const rating = ratings[course.id] || 0;
 
@@ -131,9 +140,15 @@ export default function FeedbackPage() {
         courseId: course.id,
         rating,
         tags: selectedTags[course.id] || [],
+        comment: comments[course.id]?.trim() || undefined,
+        isAnonymous: Boolean(anonymous[course.id]),
       });
 
       setMessage(`Course evaluation submitted for ${course.code}.`);
+      setRatings((prev) => ({ ...prev, [course.id]: 0 }));
+      setSelectedTags((prev) => ({ ...prev, [course.id]: [] }));
+      setComments((prev) => ({ ...prev, [course.id]: "" }));
+      setAnonymous((prev) => ({ ...prev, [course.id]: false }));
     } catch (error) {
       console.error("Feedback submit error:", error);
       setMessage("Feedback could not be submitted.");
@@ -154,24 +169,13 @@ export default function FeedbackPage() {
             <div className="flex items-center gap-3">
               <div className="mr-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
                 <span className="text-sm font-medium text-blue-500">
-                  Academic Week: 8
+                  Academic Week
                 </span>
               </div>
 
-              <button
-                className="relative rounded-lg p-2.5 transition hover:bg-slate-100"
-                type="button"
-              >
-                <Bell className="h-5 w-5 text-slate-600" />
-                <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-              </button>
+              <NotificationBell />
 
-              <button
-                className="rounded-lg p-2.5 transition hover:bg-slate-100"
-                type="button"
-              >
-                <Settings className="h-5 w-5 text-slate-600" />
-              </button>
+              <SettingsButton href="/settings" />
             </div>
           </div>
         </header>
@@ -242,7 +246,7 @@ export default function FeedbackPage() {
                             {course.title}
                           </h3>
                           <p className="text-sm text-slate-500">
-                            {course.semester || "Spring 2026 Semester"}
+                            {course.semester || "Current Semester"}
                           </p>
                         </div>
                       </div>
@@ -308,6 +312,19 @@ export default function FeedbackPage() {
                           );
                         })}
                       </div>
+                    </div>
+
+                    <div className="mt-6">
+                      <label className="mb-2 block text-sm font-medium text-slate-700">
+                        Additional Comment Optional
+                      </label>
+                      <textarea
+                        value={comments[course.id] || ""}
+                        onChange={(e) => setComment(course.id, e.target.value)}
+                        rows={4}
+                        placeholder="Share additional thoughts about this course..."
+                        className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      />
                     </div>
 
                     <div className="mt-6 flex justify-end">

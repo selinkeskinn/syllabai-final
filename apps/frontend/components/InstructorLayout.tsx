@@ -23,12 +23,25 @@ type StoredUser = {
   name?: string;
   email?: string;
   role?: string;
+  avatarUrl?: string | null;
 };
 
 type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
+};
+
+const getAvatarUrl = (value?: string | null) => {
+  if (!value) return "";
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+  const serverBase = apiBase.replace(/\/api\/?$/, "");
+  return `${serverBase}${value.startsWith("/") ? value : `/${value}`}`;
 };
 
 const navItems: NavItem[] = [
@@ -76,36 +89,65 @@ function getInitials(name?: string) {
 export default function InstructorLayout({ children }: InstructorLayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<StoredUser>({
-    name: "Instructor User",
-    email: "instructor@test.com",
-  });
+  const [user, setUser] = useState<StoredUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem("user");
+    const token = localStorage.getItem("token");
+    const storedUser = localStorage.getItem("user");
 
-      if (storedUser) {
-        const parsedUser = JSON.parse(storedUser) as StoredUser;
-        setUser({
-          name: parsedUser.name || "Instructor User",
-          email: parsedUser.email || "instructor@test.com",
-          role: parsedUser.role,
-        });
-      }
-    } catch {
-      setUser({
-        name: "Instructor User",
-        email: "instructor@test.com",
-      });
+    if (!token || !storedUser) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
+      return;
     }
-  }, []);
+
+    try {
+      const parsedUser = JSON.parse(storedUser) as StoredUser;
+
+      if (parsedUser.role !== "INSTRUCTOR") {
+        router.replace(parsedUser.role === "STUDENT" ? "/dashboard" : "/");
+        return;
+      }
+
+      setUser(parsedUser);
+      setAuthChecked(true);
+
+      const refreshStoredUser = () => {
+        const updatedRawUser = localStorage.getItem("user");
+        if (!updatedRawUser) return;
+
+        try {
+          setUser(JSON.parse(updatedRawUser) as StoredUser);
+        } catch {
+          // Ignore malformed local storage updates.
+        }
+      };
+
+      window.addEventListener("user-updated", refreshStoredUser);
+      return () => window.removeEventListener("user-updated", refreshStoredUser);
+    } catch (error) {
+      console.error("Instructor layout auth check error:", error);
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.replace("/");
+    }
+  }, [router]);
 
   const handleSignOut = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     router.push("/");
   };
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -156,22 +198,33 @@ export default function InstructorLayout({ children }: InstructorLayoutProps) {
           </nav>
 
           <div className="border-t border-slate-200 p-5">
-            <div className="mb-4 rounded-2xl bg-blue-50 p-4">
+            <Link
+              href="/instructor/settings"
+              className="mb-4 block rounded-2xl bg-blue-50 p-4 transition hover:bg-blue-100"
+            >
               <div className="flex items-center gap-4">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white">
-                  {getInitials(user.name)}
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-blue-600 text-xl font-bold text-white">
+                  {getAvatarUrl(user?.avatarUrl) ? (
+                    <img
+                      src={getAvatarUrl(user?.avatarUrl)}
+                      alt={user?.name || "Profile photo"}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    getInitials(user?.name)
+                  )}
                 </div>
 
                 <div className="min-w-0">
                   <p className="truncate text-[19px] font-bold text-slate-900">
-                    {user.name || "Instructor User"}
+                    {user?.name || "Instructor User"}
                   </p>
                   <p className="truncate text-sm text-slate-500">
-                    {user.email || "instructor@test.com"}
+                    {user?.email || "No email"}
                   </p>
                 </div>
               </div>
-            </div>
+            </Link>
 
             <button
               type="button"
