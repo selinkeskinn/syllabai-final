@@ -12,6 +12,35 @@ import { ChatDto } from './dto/chat.dto';
 
 type CourseSyllabusSummary = {
   courseSummary: string;
+  instructorInfo: {
+    office: string;
+    officeHours: string;
+    cvLink: string;
+  };
+  courseInfo: {
+    credits: string;
+    classSchedule: string;
+    classroom: string;
+    courseType: string;
+    prerequisites: string;
+    courseObjectives: string;
+  };
+  policySections: {
+    communication: string;
+    aiDigitalTools: string;
+    deadlines: string;
+    attendance: string;
+    disabledStudentSupport: string;
+    communicationEthics: string;
+    privacyCopyright: string;
+    academicIntegrity: string;
+  };
+  moreInfo: {
+    learningOutcomes: string[];
+    contributionToProgram: string;
+    courseStructure: string;
+    teachingMethods: string[];
+  };
   gradingItems: Array<{
     label: string;
     value: string;
@@ -21,6 +50,7 @@ type CourseSyllabusSummary = {
   resources: string[];
   weeklyTopics: Array<{
     weekNo: number | null;
+    place?: string;
     topic: string;
     details: string;
     todo: string;
@@ -32,6 +62,11 @@ type CourseSyllabusSummary = {
 
 @Injectable()
 export class AiService {
+  private readonly syllabusSummaryCache = new Map<
+    string,
+    { fingerprint: string; summary: CourseSyllabusSummary }
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiProvider: AiProviderService,
@@ -121,8 +156,30 @@ export class AiService {
       })
       .join('\n\n');
 
-    const answer = await this.generateRagAnswer(question, context);
-    const sources = matches.map((match) => ({
+    const fullCourseText = [...candidates]
+      .sort((a, b) => {
+        const resourceCompare = a.resourceId.localeCompare(b.resourceId);
+
+        if (resourceCompare !== 0) return resourceCompare;
+
+        return a.chunkIndex - b.chunkIndex;
+      })
+      .map((chunk) => chunk.content)
+      .join('\n');
+    const deterministicAnswer = this.generateDeterministicRagAnswer(
+      question,
+      fullCourseText,
+    );
+    const answer =
+      deterministicAnswer ?? (await this.generateRagAnswer(question, context));
+    const sourceMatches = deterministicAnswer
+      ? [...matches].sort(
+          (a, b) =>
+            this.answerSourceBoost(question, b.content) -
+            this.answerSourceBoost(question, a.content),
+        )
+      : matches;
+    const sources = sourceMatches.map((match) => ({
       resourceId: match.resource.id,
       resourceName: match.resource.originalName,
       pageNumber: match.pageNumber,
@@ -183,10 +240,18 @@ export class AiService {
       );
     }
 
+    const fingerprint = this.buildSummaryFingerprint(chunks);
+    const cached = this.syllabusSummaryCache.get(course.id);
+
+    if (cached?.fingerprint === fingerprint) {
+      return cached.summary;
+    }
+
     const context = this.buildSummaryContext(chunks);
     const systemPrompt =
-      'You extract structured syllabus information from course PDF text. ' +
-      'Return only valid JSON. Do not wrap it in markdown. If a field is missing, use an empty string or empty array.';
+      'You extract structured information from a university syllabus PDF. ' +
+      'Return only valid JSON. Do not wrap it in markdown. If a field is missing, use an empty string or empty array. ' +
+      'Do not invent values. Do not extract semester/period, course code, course name, instructor name, instructor email, or delivery method; those are managed by the application.';
 
     const userPrompt = `
 Course: ${course.code} - ${course.title}
@@ -194,17 +259,48 @@ Course: ${course.code} - ${course.title}
 Return this exact JSON shape:
 {
   "courseSummary": "short course overview from the PDF",
+  "instructorInfo": {
+    "office": "D545",
+    "officeHours": "Tuesday 12:30-13:30",
+    "cvLink": "https://..."
+  },
+  "courseInfo": {
+    "credits": "3/7",
+    "classSchedule": "Wednesday 08:30",
+    "classroom": "Check UMIS",
+    "courseType": "Must",
+    "prerequisites": "Basic programming is recommended",
+    "courseObjectives": "course objectives paragraph"
+  },
+  "policySections": {
+    "communication": "Communication Channels and Methods section text",
+    "aiDigitalTools": "Usage of AI & Digital Tools / Usage of Digital Tools section text",
+    "deadlines": "Deadlines / Assignments and Project Deadline section text",
+    "attendance": "Attendance section text",
+    "disabledStudentSupport": "Disabled Student Support section text",
+    "communicationEthics": "Oral and Written Communication Ethics section text",
+    "privacyCopyright": "Privacy and Copyright section text",
+    "academicIntegrity": "Academic Integrity, Cheating and Plagiarism section text"
+  },
+  "moreInfo": {
+    "learningOutcomes": ["one learning outcome"],
+    "contributionToProgram": "Contribution of the Course to the Program section text",
+    "courseStructure": "Course Structure section text",
+    "teachingMethods": ["Lecture", "Project"]
+  },
   "gradingItems": [
     {"label": "Midterm", "value": "30%", "description": "short description"}
   ],
   "policies": ["policy item"],
   "resources": ["resource item"],
   "weeklyTopics": [
-    {"weekNo": 1, "topic": "topic", "details": "details", "todo": "reading/homework if present"}
+    {"weekNo": 1, "place": "F2F / ONLINE / Hybrid if present", "topic": "topic", "details": "assignment/deadline if present", "todo": "reading/homework if present"}
   ],
   "importantDates": ["date or deadline item"],
   "officeHours": "office hour information if present"
 }
+
+Important: Course Calendar is a 15-week table in this syllabus format. Return exactly 15 weeklyTopics entries for weeks 1 through 15 when a Course Calendar table exists. Parse rows labeled W1, W2, ... W15 as week numbers.
 
 PDF text:
 ${context}`;
@@ -217,32 +313,55 @@ ${context}`;
       const normalized = this.normalizeSummary(rawAnswer);
       const fallback = this.fallbackSummaryFromChunks(chunks);
 
-      return {
+      const summary = {
         courseSummary: normalized.courseSummary || fallback.courseSummary,
-        gradingItems: normalized.gradingItems.length
-          ? normalized.gradingItems
-          : fallback.gradingItems,
+        instructorInfo: this.mergeInstructorInfo(
+          normalized.instructorInfo,
+          fallback.instructorInfo,
+        ),
+        courseInfo: this.mergeCourseInfo(
+          normalized.courseInfo,
+          fallback.courseInfo,
+        ),
+        policySections: this.mergePolicySections(
+          normalized.policySections,
+          fallback.policySections,
+        ),
+        moreInfo: this.mergeMoreInfo(normalized.moreInfo, fallback.moreInfo),
+        gradingItems: this.mergeGradingItems(
+          normalized.gradingItems,
+          fallback.gradingItems,
+        ),
         policies: normalized.policies.length
           ? normalized.policies
           : fallback.policies,
-        resources: normalized.resources.length
-          ? normalized.resources
-          : fallback.resources,
-        weeklyTopics: normalized.weeklyTopics.length
-          ? normalized.weeklyTopics
-          : fallback.weeklyTopics,
+        resources: this.mergeResources(normalized.resources, fallback.resources),
+        weeklyTopics: this.mergeWeeklyTopics(
+          normalized.weeklyTopics,
+          fallback.weeklyTopics,
+        ),
         importantDates: normalized.importantDates.length
           ? normalized.importantDates
           : fallback.importantDates,
         officeHours: normalized.officeHours || fallback.officeHours,
         sourceCount: chunks.length,
       };
+
+      this.syllabusSummaryCache.set(course.id, { fingerprint, summary });
+      return summary;
     } catch {
-      return {
+      const summary = {
         ...this.fallbackSummaryFromChunks(chunks),
         sourceCount: chunks.length,
       };
+
+      this.syllabusSummaryCache.set(course.id, { fingerprint, summary });
+      return summary;
     }
+  }
+
+  invalidateCourseSyllabusSummary(courseId: string) {
+    this.syllabusSummaryCache.delete(courseId);
   }
 
   async chat(userId: string, role: string, dto: ChatDto) {
@@ -464,12 +583,76 @@ ${context}`;
     );
   }
 
+  private generateDeterministicRagAnswer(question: string, courseText: string) {
+    const normalizedQuestion = question.toLowerCase();
+
+    if (
+      !/\b(grading|grade|grades|evaluation|assessment|weight|percentage)\b/i.test(
+        normalizedQuestion,
+      )
+    ) {
+      return null;
+    }
+
+    const gradingItems = this.extractGradingItems(courseText);
+
+    if (!gradingItems.length) {
+      return null;
+    }
+
+    const wantsDetails = /\b(detail|details|description|describe|explain)\b/i.test(
+      normalizedQuestion,
+    );
+    const lines = gradingItems.slice(0, 6).map((item) => {
+      const parts = item.description.split('|').map((part) => part.trim());
+      const description = parts[0] || 'Assessment component';
+      const scoring = parts[1] || '';
+      const weight = parts[2] || item.value;
+      const scoringText = scoring ? ` (${scoring} points)` : '';
+
+      return wantsDetails
+        ? `- ${item.label}: ${weight}${scoringText} — ${description}`
+        : `- ${item.label}: ${weight}${scoringText}`;
+    });
+    const relativeGrading =
+      /\brelative grading system\b/i.test(courseText) ||
+      /\bproper letter grade\b/i.test(courseText);
+
+    return [
+      'Based on the uploaded syllabus:',
+      ...lines,
+      relativeGrading
+        ? '- Grading rule: the course uses a relative grading system.'
+        : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private answerSourceBoost(question: string, content: string) {
+    if (
+      !/\b(grading|grade|grades|evaluation|assessment|weight|percentage)\b/i.test(
+        question,
+      )
+    ) {
+      return 0;
+    }
+
+    if (/Grading and Evaluation/i.test(content)) return 30;
+    if (/\b(Project|Midterm|Final)\b/i.test(content)) return 15;
+    if (/\brelative grading system\b/i.test(content)) return 8;
+
+    return 0;
+  }
+
   private async generateRagAnswer(question: string, context: string) {
     const systemPrompt =
       'You are a course assistant. Answer only from the provided course document context. ' +
       'If the context does not contain the answer, say that the uploaded course documents do not include enough information. ' +
-      'If the user asks about grading, prioritize grading components, percentages, exams, assignments, projects, quizzes, relative grading rules, and evaluation rules. If no percentages or components exist, state only the available grading rule. ' +
-      'Keep the answer concise and mention that it is based on the uploaded sources.';
+      'Keep answers short: use at most 4 bullet points or 4 short sentences. ' +
+      'Do not add assumptions, inferred notes, caveats, or repeated explanations. ' +
+      'If the user asks about grading, list only the grading components, scoring, weights, and one grading rule if explicitly present. ' +
+      'Do not say “it can be inferred” or “the syllabus does not mention” unless that is the entire answer.';
 
     try {
       return await this.aiProvider.createAnswer([
@@ -515,12 +698,34 @@ ${context}`;
     return context.trim();
   }
 
+  private buildSummaryFingerprint(
+    chunks: Array<{
+      resourceId: string;
+      chunkIndex: number;
+      createdAt: Date;
+    }>,
+  ) {
+    const resourceIds = Array.from(
+      new Set(chunks.map((chunk) => chunk.resourceId)),
+    ).join('|');
+    const latestChunkTime = chunks.reduce(
+      (latest, chunk) => Math.max(latest, chunk.createdAt.getTime()),
+      0,
+    );
+
+    return `${resourceIds}:${chunks.length}:${latestChunkTime}`;
+  }
+
   private normalizeSummary(rawAnswer: string) {
     const jsonText = this.extractJsonObject(rawAnswer);
     const parsed = JSON.parse(jsonText) as Partial<CourseSyllabusSummary>;
 
     return {
       courseSummary: this.asString(parsed.courseSummary),
+      instructorInfo: this.normalizeInstructorInfo(parsed.instructorInfo),
+      courseInfo: this.normalizeCourseInfo(parsed.courseInfo),
+      policySections: this.normalizePolicySections(parsed.policySections),
+      moreInfo: this.normalizeMoreInfo(parsed.moreInfo),
       gradingItems: Array.isArray(parsed.gradingItems)
         ? parsed.gradingItems.map((item) => ({
             label: this.asString(item?.label),
@@ -536,6 +741,7 @@ ${context}`;
               typeof item?.weekNo === 'number' && Number.isFinite(item.weekNo)
                 ? item.weekNo
                 : null,
+            place: this.asString(item?.place),
             topic: this.asString(item?.topic),
             details: this.asString(item?.details),
             todo: this.asString(item?.todo),
@@ -553,23 +759,15 @@ ${context}`;
       resource: { originalName: string };
     }>,
   ) {
-    const text = chunks
+    const rawText = chunks
       .map((chunk) => chunk.content)
       .join('\n')
+      .replace(/\r/g, '');
+    const text = rawText
       .replace(/\s+/g, ' ')
       .trim();
 
-    const gradingMatches = Array.from(
-      text.matchAll(
-        /([A-Za-z][A-Za-z\s/&-]{2,40})[:\s-]+(\d+(?:\.\d+)?\s*%)/g,
-      ),
-    )
-      .slice(0, 8)
-      .map((match) => ({
-        label: match[1].trim(),
-        value: match[2].trim(),
-        description: 'Extracted from uploaded PDF text',
-      }));
+    const gradingMatches = this.extractGradingItems(text);
     const gradingSentences = this.extractSentences(text, [
       'grading',
       'grade',
@@ -588,16 +786,88 @@ ${context}`;
         chunks.map((chunk) => `Uploaded PDF: ${chunk.resource.originalName}`),
       ),
     );
-    const extractedResources = this.extractSentences(text, [
-      'textbook',
-      'resource',
-      'reading',
-      'slides',
-      'book',
-    ]);
+    const extractedResources = this.extractCourseResources(text, resourceNames);
+    const fallbackCourseInfo = {
+      credits: this.extractValueBetween(text, 'Course Credit / ECTS', [
+        'Classroom',
+        'Mode of Delivery',
+      ]),
+      classSchedule: this.extractValueBetween(text, 'Time', [
+        'Course Credit',
+        'Classroom',
+      ]),
+      classroom: this.extractValueBetween(text, 'Classroom', [
+        'Mode of Delivery',
+        'Course type',
+      ]),
+      courseType: this.extractValueBetween(text, 'Course type', [
+        'Course ECTS',
+        'Prerequisite',
+      ]),
+      prerequisites: this.extractPrerequisites(text),
+      courseObjectives: this.extractCourseObjectives(text),
+    };
+    const fallbackPolicySections = this.normalizePolicySections({
+      communication: this.extractPolicySection(
+        text,
+        'Communication Channels and Methods',
+        ['Usage of Digital Tools', 'Mobile Technologies'],
+      ),
+      aiDigitalTools: this.extractPolicySection(text, 'Usage of Digital Tools', [
+        'Assignments and Project Deadline',
+        'Deadlines',
+        'Attendance',
+      ]),
+      deadlines:
+        this.extractPolicySection(text, 'Assignments and Project Deadline', [
+          'Attendance',
+        ]) || this.extractPolicySection(text, 'Deadlines', ['Attendance']),
+      attendance: this.extractPolicySection(text, 'Attendance', [
+        'Disabled Student Support',
+      ]),
+      disabledStudentSupport: this.extractPolicySection(
+        text,
+        'Disabled Student Support',
+        ['Oral and Written Communication Ethics'],
+      ),
+      communicationEthics: this.extractPolicySection(
+        text,
+        'Oral and Written Communication Ethics',
+        ['Privacy and Copyright'],
+      ),
+      privacyCopyright: this.extractPolicySection(text, 'Privacy and Copyright', [
+        'Course Resources',
+        'Academic Integrity',
+      ]),
+      academicIntegrity: this.extractPolicySection(
+        text,
+        'Academic Integrity, Cheating and Plagiarism',
+        ['Prepared by', 'Prepared by Name'],
+      ),
+    });
+    const fallbackMoreInfo = {
+      learningOutcomes: this.extractLearningOutcomes(text),
+      contributionToProgram: this.cleanPdfText(
+        this.extractBetween(text, 'Contribution of the Course to the Program', [
+          'Course Structure',
+        ]),
+      ),
+      courseStructure: this.extractCourseStructure(text),
+      teachingMethods: this.extractTeachingMethods(text),
+    };
 
     return {
       courseSummary: this.preview(text, 700),
+      instructorInfo: {
+        office: this.extractInstructorOffice(text),
+        officeHours: this.extractInstructorOfficeHours(text),
+        cvLink: this.asUrlString(
+          this.extractValueBetween(text, 'CV (link)', ['Course Information']),
+        ),
+      },
+      courseInfo: fallbackCourseInfo,
+      policySections: fallbackPolicySections,
+      moreInfo: fallbackMoreInfo,
       gradingItems,
       policies: this.extractSentences(text, [
         'attendance',
@@ -607,8 +877,8 @@ ${context}`;
         'integrity',
         'plagiarism',
       ]),
-      resources: extractedResources.length ? extractedResources : resourceNames,
-      weeklyTopics: this.extractWeeklyTopics(text),
+      resources: extractedResources,
+      weeklyTopics: this.extractWeeklyTopics(rawText),
       importantDates: this.extractSentences(text, [
         'due',
         'deadline',
@@ -634,7 +904,41 @@ ${context}`;
   }
 
   private asString(value: unknown) {
-    return typeof value === 'string' ? value.trim() : '';
+    if (typeof value !== 'string') return '';
+
+    const text = value.trim();
+    return this.isPlaceholderValue(text) ? '' : text;
+  }
+
+  private isPlaceholderValue(value: string) {
+    const normalized = value.toLowerCase().replace(/\s+/g, ' ').trim();
+    const placeholders = new Set([
+      'short course overview from the pdf',
+      'course objectives paragraph',
+      'communication channels and methods section text',
+      'usage of ai & digital tools / usage of digital tools section text',
+      'deadlines / assignments and project deadline section text',
+      'attendance section text',
+      'disabled student support section text',
+      'oral and written communication ethics section text',
+      'privacy and copyright section text',
+      'academic integrity, cheating and plagiarism section text',
+      'contribution of the course to the program section text',
+      'course structure section text',
+      'short description',
+      'policy item',
+      'resource item',
+      'topic',
+      'details',
+      'reading/homework if present',
+      'assignment/deadline if present',
+      'f2f / online / hybrid if present',
+      'date or deadline item',
+      'office hour information if present',
+      'one learning outcome',
+    ]);
+
+    return placeholders.has(normalized);
   }
 
   private asStringArray(value: unknown) {
@@ -643,6 +947,221 @@ ${context}`;
           .map((item) => this.asString(item))
           .filter((item) => item.length > 0)
       : [];
+  }
+
+  private asRecord(value: unknown) {
+    return value && typeof value === 'object'
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private normalizeInstructorInfo(value: unknown) {
+    const record = this.asRecord(value);
+
+    return {
+      office: this.asString(record.office),
+      officeHours: this.asString(record.officeHours),
+      cvLink: this.asUrlString(record.cvLink),
+    };
+  }
+
+  private normalizeCourseInfo(value: unknown) {
+    const record = this.asRecord(value);
+
+    return {
+      credits: this.asString(record.credits),
+      classSchedule: this.asString(record.classSchedule),
+      classroom: this.asString(record.classroom),
+      courseType: this.asString(record.courseType),
+      prerequisites: this.asString(record.prerequisites),
+      courseObjectives: this.asString(record.courseObjectives),
+    };
+  }
+
+  private normalizePolicySections(value: unknown) {
+    const record = this.asRecord(value);
+
+    return {
+      communication: this.asString(record.communication),
+      aiDigitalTools: this.asString(record.aiDigitalTools),
+      deadlines: this.asString(record.deadlines),
+      attendance: this.asString(record.attendance),
+      disabledStudentSupport: this.asString(record.disabledStudentSupport),
+      communicationEthics: this.asString(record.communicationEthics),
+      privacyCopyright: this.asString(record.privacyCopyright),
+      academicIntegrity: this.asString(record.academicIntegrity),
+    };
+  }
+
+  private normalizeMoreInfo(value: unknown) {
+    const record = this.asRecord(value);
+
+    return {
+      learningOutcomes: this.asStringArray(record.learningOutcomes),
+      contributionToProgram: this.asString(record.contributionToProgram),
+      courseStructure: this.asString(record.courseStructure),
+      teachingMethods: this.asStringArray(record.teachingMethods),
+    };
+  }
+
+  private mergeInstructorInfo(
+    primary: CourseSyllabusSummary['instructorInfo'],
+    fallback: CourseSyllabusSummary['instructorInfo'],
+  ) {
+    return {
+      office: primary.office || fallback.office,
+      officeHours: primary.officeHours || fallback.officeHours,
+      cvLink: primary.cvLink || fallback.cvLink,
+    };
+  }
+
+  private asUrlString(value: unknown) {
+    const text = this.asString(value);
+
+    if (!/^https?:\/\/\S+$/i.test(text) || text.includes('...')) {
+      return '';
+    }
+
+    try {
+      const url = new URL(text);
+
+      if (url.hostname === '...' || url.hostname.includes('..')) {
+        return '';
+      }
+
+      return url.toString();
+    } catch {
+      return '';
+    }
+  }
+
+  private mergeCourseInfo(
+    primary: CourseSyllabusSummary['courseInfo'],
+    fallback: CourseSyllabusSummary['courseInfo'],
+  ) {
+    return {
+      credits: primary.credits || fallback.credits,
+      classSchedule: primary.classSchedule || fallback.classSchedule,
+      classroom: primary.classroom || fallback.classroom,
+      courseType: primary.courseType || fallback.courseType,
+      prerequisites: primary.prerequisites || fallback.prerequisites,
+      courseObjectives: primary.courseObjectives || fallback.courseObjectives,
+    };
+  }
+
+  private mergePolicySections(
+    primary: CourseSyllabusSummary['policySections'],
+    fallback: CourseSyllabusSummary['policySections'],
+  ) {
+    return {
+      communication: fallback.communication || primary.communication,
+      aiDigitalTools: fallback.aiDigitalTools || primary.aiDigitalTools,
+      deadlines: fallback.deadlines || primary.deadlines,
+      attendance: fallback.attendance || primary.attendance,
+      disabledStudentSupport:
+        fallback.disabledStudentSupport || primary.disabledStudentSupport,
+      communicationEthics:
+        fallback.communicationEthics || primary.communicationEthics,
+      privacyCopyright: fallback.privacyCopyright || primary.privacyCopyright,
+      academicIntegrity: fallback.academicIntegrity || primary.academicIntegrity,
+    };
+  }
+
+  private mergeMoreInfo(
+    primary: CourseSyllabusSummary['moreInfo'],
+    fallback: CourseSyllabusSummary['moreInfo'],
+  ) {
+    return {
+      learningOutcomes: fallback.learningOutcomes.length
+        ? fallback.learningOutcomes
+        : primary.learningOutcomes,
+      contributionToProgram:
+        fallback.contributionToProgram || primary.contributionToProgram,
+      courseStructure: primary.courseStructure || fallback.courseStructure,
+      teachingMethods: fallback.teachingMethods.length
+        ? fallback.teachingMethods
+        : primary.teachingMethods,
+    };
+  }
+
+  private mergeResources(primary: string[], fallback: string[]) {
+    const hasExtractedCourseResources = fallback.some(
+      (item) => !item.startsWith('Uploaded PDF:'),
+    );
+
+    if (hasExtractedCourseResources) {
+      return fallback;
+    }
+
+    return primary.length ? primary : fallback;
+  }
+
+  private mergeGradingItems(
+    primary: CourseSyllabusSummary['gradingItems'],
+    fallback: CourseSyllabusSummary['gradingItems'],
+  ) {
+    const fallbackLooksStructured = fallback.some((item) =>
+      /\|\s*\d+(?:\.\d+)?\s*\|\s*\d+(?:\.\d+)?\s*%/i.test(item.description),
+    );
+
+    if (fallbackLooksStructured) {
+      return fallback;
+    }
+
+    return primary.length ? primary : fallback;
+  }
+
+  private mergeWeeklyTopics(
+    primary: CourseSyllabusSummary['weeklyTopics'],
+    fallback: CourseSyllabusSummary['weeklyTopics'],
+  ) {
+    const toWeekMap = (items: CourseSyllabusSummary['weeklyTopics']) => {
+      const map = new Map<
+        number,
+        CourseSyllabusSummary['weeklyTopics'][number]
+      >();
+
+      for (const item of items) {
+        const weekNo = Number(item.weekNo);
+
+        if (!Number.isInteger(weekNo) || weekNo < 1 || weekNo > 15) {
+          continue;
+        }
+
+        map.set(weekNo, { ...item, weekNo });
+      }
+
+      return map;
+    };
+
+    const primaryByWeek = toWeekMap(primary);
+    const fallbackByWeek = toWeekMap(fallback);
+
+    return Array.from({ length: 15 }, (_, index) => {
+      const weekNo = index + 1;
+      const fallbackItem = fallbackByWeek.get(weekNo);
+      const primaryItem = primaryByWeek.get(weekNo);
+      const fallbackTopic = fallbackItem?.topic || '';
+      const primaryTopic = primaryItem?.topic || '';
+
+      return {
+        weekNo,
+        place: fallbackItem?.place || primaryItem?.place || '',
+        topic: this.isUsefulCalendarValue(fallbackTopic)
+          ? fallbackTopic
+          : this.isUsefulCalendarValue(primaryTopic)
+            ? primaryTopic
+            : 'Not published yet',
+        details: fallbackItem?.details || primaryItem?.details || '',
+        todo: fallbackItem?.todo || primaryItem?.todo || '',
+      };
+    });
+  }
+
+  private isUsefulCalendarValue(value: string) {
+    const normalized = value.toLowerCase().replace(/\s+/g, ' ').trim();
+
+    return Boolean(normalized) && normalized !== 'not published yet';
   }
 
   private extractSentences(text: string, keywords: string[]) {
@@ -660,17 +1179,724 @@ ${context}`;
       .slice(0, 8);
   }
 
-  private extractWeeklyTopics(text: string) {
-    const matches = Array.from(
-      text.matchAll(/week\s*(\d{1,2})\s*[:.-]?\s*([^.;\n]{5,120})/gi),
+  private extractBetween(text: string, startLabel: string, endLabels: string[]) {
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    const lowerText = normalizedText.toLowerCase();
+    const start = lowerText.indexOf(startLabel.toLowerCase());
+
+    if (start === -1) {
+      return '';
+    }
+
+    const contentStart = start + startLabel.length;
+    const end = endLabels
+      .map((label) => lowerText.indexOf(label.toLowerCase(), contentStart))
+      .filter((index) => index > contentStart)
+      .sort((a, b) => a - b)[0];
+    const value = normalizedText
+      .slice(contentStart, end ?? normalizedText.length)
+      .replace(/^[:\s-]+/, '')
+      .trim();
+
+    return this.preview(value, 1800);
+  }
+
+  private extractValueBetween(
+    text: string,
+    label: string,
+    endLabels: string[],
+  ) {
+    return this.preview(this.extractBetween(text, label, endLabels), 220);
+  }
+
+  private extractInstructorOffice(text: string) {
+    const match = text.match(
+      /\bOf\s*fice\s*:\s*(.+?)(?=\s+(?:E\s*-\s*Mail|Email|Office\s+Hours)\s*:)/i,
     );
 
-    return matches.slice(0, 16).map((match) => ({
-      weekNo: Number(match[1]),
-      topic: match[2].trim(),
-      details: '',
-      todo: '',
-    }));
+    return this.preview(this.cleanPdfText(match?.[1] || ''), 120);
+  }
+
+  private extractInstructorOfficeHours(text: string) {
+    const match = text.match(
+      /\bOffice\s+Hours\s*:\s*:?\s*(.+?)(?=\s+CV\s*\(link\)|\s+Course Information\b)/i,
+    );
+
+    return this.preview(this.cleanPdfText(match?.[1] || ''), 180);
+  }
+
+  private extractPolicySection(
+    text: string,
+    startLabel: string,
+    endLabels: string[],
+  ) {
+    const section = this.extractBetween(text, startLabel, endLabels);
+    const repeatedHeading = new RegExp(`${this.escapeRegExp(startLabel)}:\\s*`, 'i');
+    const headingMatch = section.match(repeatedHeading);
+    const cleanSection =
+      headingMatch?.index !== undefined
+        ? section.slice(headingMatch.index + headingMatch[0].length)
+        : section;
+
+    return this.cleanPolicyText(cleanSection);
+  }
+
+  private cleanPolicyText(value: string) {
+    const withLineBreaks = this.cleanPdfText(value)
+      .replace(/\be-mail\b/gi, 'email')
+      .replace(/\be\s*-\s*mail\b/gi, 'email')
+      .replace(/\bMsTeams\b/g, 'MS Teams')
+      .replace(/\bMat\s*erials\b/gi, 'Materials')
+      .replace(/\bpa\s*rticipate\b/gi, 'participate')
+      .replace(/\bdis\s*abilities\b/gi, 'disabilities')
+      .replace(/\bcommunicatio\s+n\b/gi, 'communication')
+      .replace(/\bad\s+dition\b/gi, 'addition')
+      .replace(/\bplagiaris\s+m\b/gi, 'plagiarism')
+      .replace(/\bproceedi\s+ngs\b/gi, 'proceedings')
+      .replace(/\bactivit\s+y\b/gi, 'activity')
+      .replace(/\bIn\s+stitution\b/g, 'Institution')
+      .replace(/\bemai\s+l\b/gi, 'email')
+      .replace(/\bth\s+e\b/gi, 'the')
+      .replace(/\bex\s+cuses\b/gi, 'excuses')
+      .replace(/\b3\s*-\s*(?=Emails\b)/i, '- ')
+      .replace(/(?<=ignored)-(?=Emails\b)/g, '\n- ')
+      .replace(/(?<=app\.)-(?=Please\b)/g, '\n- ')
+      .replace(/(?<=accepted\.)-(?=Sufficient\b)/g, '\n- ')
+      .replace(/If you are unable to c ial via email\.\s*/gi, '')
+      .replace(/Such activit m or similar violations[^.]+\.\s*/gi, '')
+      .replace(/\s+-\s+(?=[A-Z])/g, '\n- ');
+    const normalized = withLineBreaks
+      .split('\n')
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join('\n');
+
+    return this.removeDuplicateSentences(normalized);
+  }
+
+  private removeDuplicateSentences(value: string) {
+    const lines = value.split('\n').filter((line, index, allLines) => {
+      const nextLine = allLines[index + 1];
+
+      if (!line.startsWith('- ') || !nextLine?.startsWith('- ')) {
+        return true;
+      }
+
+      const linePrefix = line.slice(0, 80).toLowerCase();
+      const nextPrefix = nextLine.slice(0, 80).toLowerCase();
+
+      return !(linePrefix === nextPrefix && nextLine.length > line.length);
+    });
+
+    return lines
+      .map((line) => {
+        if (line.startsWith('- ')) return line;
+
+        const sentences = line
+          .split(/(?<=[.!?])\s+/)
+          .map((sentence) => sentence.trim())
+          .filter(Boolean);
+
+        return Array.from(new Set(sentences)).join(' ');
+      })
+      .join('\n')
+      .trim();
+  }
+
+  private escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private extractLearningOutcomes(text: string) {
+    const section = this.extractBetween(text, 'Course Learning Outcomes', [
+      'Contribution of the Course to the Program',
+      'Course Structure',
+    ]);
+
+    if (!section) {
+      return [];
+    }
+
+    const outcomeVerbs = [
+      'Understand',
+      'Apply',
+      'Import',
+      'Prepare',
+      'Query',
+      'Analyze',
+      'Visualize',
+    ];
+    const verbPattern = outcomeVerbs.join('|');
+    const byVerb = new Map<string, string>();
+    const normalizedSection = section
+      .replace(/^The students who have succeeded in this course;\s*/i, '')
+      .trim();
+    const verbMatches = Array.from(
+      normalizedSection.matchAll(
+        new RegExp(
+          `\\b(${verbPattern})\\b([\\s\\S]*?)(?=\\b(?:${verbPattern})\\b|$)`,
+          'gi',
+        ),
+      ),
+    );
+
+    for (const match of verbMatches) {
+      const verb = this.capitalizeWord(match[1]);
+      const outcome = this.cleanPdfText(`${verb}${match[2] || ''}`)
+        .replace(/\s+/g, ' ')
+        .trim();
+      const existing = byVerb.get(verb) || '';
+
+      if (outcome.length >= 20 && outcome.length > existing.length) {
+        byVerb.set(verb, outcome);
+      }
+    }
+
+    const orderedOutcomes = outcomeVerbs
+      .map((verb) => byVerb.get(verb))
+      .filter((item): item is string => Boolean(item));
+
+    if (orderedOutcomes.length) {
+      return [
+        `The students who have succeeded in this course; ${orderedOutcomes.join(' ')}`,
+      ];
+    }
+
+    const numbered = Array.from(section.matchAll(/\b\d+\.\s*([^.;]+[.;]?)/g))
+      .map((match) => match[1].trim())
+      .filter(Boolean);
+
+    if (numbered.length) {
+      return numbered.slice(0, 10);
+    }
+
+    return this.extractSentences(section, ['student', 'students', 'course']).slice(
+      0,
+      8,
+    );
+  }
+
+  private extractTeachingMethods(text: string) {
+    const section = this.extractBetween(
+      text,
+      'Teaching Methods and Techniques Used in the Course',
+      ['Course Policies', 'Communication Channels and Methods'],
+    );
+    const knownMethods = [
+      'Case Study',
+      'Collaborative Learning',
+      'Discussion',
+      'Implementation',
+      'Individual Study',
+      'Lecture',
+      'Problem Solving',
+      'Project',
+      'Reading',
+      'Technology-Enhanced Learning',
+    ];
+
+    if (section) {
+      const markerPattern = '[☐□☑☒✓✔]';
+      const selectedMethods = Array.from(
+        section.matchAll(
+          new RegExp(
+            `(${markerPattern})\\s*([^☐□☑☒✓✔]+?)(?=${markerPattern}|$)`,
+            'g',
+          ),
+        ),
+      )
+        .filter((match) => /[☑☒✓✔]/.test(match[1]))
+        .map((match) => this.cleanPdfText(match[2]))
+        .map((value) =>
+          knownMethods.find(
+            (method) => method.toLowerCase() === value.toLowerCase(),
+          ),
+        )
+        .filter((method): method is string => Boolean(method));
+
+      if (selectedMethods.length) {
+        return Array.from(new Set(selectedMethods));
+      }
+    }
+
+    const normalized = text.toLowerCase();
+
+    return knownMethods.filter((method) =>
+      normalized.includes(method.toLowerCase()),
+    );
+  }
+
+  private extractCourseStructure(text: string) {
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    const startMatch = normalizedText.match(/\bCourse Structure\b/i);
+
+    if (!startMatch || startMatch.index === undefined) {
+      return '';
+    }
+
+    const afterStart = normalizedText.slice(
+      startMatch.index + startMatch[0].length,
+    );
+    const endMatch = afterStart.match(
+      /\bTeaching\s+Methods\s+and\s+Techniques\s+Used\s+in\s+the\s+Course\b|\bCourse Policies\b|\bCommunication Channels and Methods\b/i,
+    );
+
+    return this.cleanCourseStructureText(
+      this.cleanPdfText(afterStart.slice(0, endMatch?.index ?? undefined)),
+    );
+  }
+
+  private cleanPdfText(value: string) {
+    return value
+      .replace(/\bsu\s+ch\b/gi, 'such')
+      .replace(/\ban\s+d\b/gi, 'and')
+      .replace(/\bar\s+e\b/gi, 'are')
+      .replace(/\bh\s+ealthcare\b/gi, 'healthcare')
+      .replace(/\s+-\s+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private cleanCourseStructureText(value: string) {
+    const beforeBrokenHeading = value.replace(/\s+Teaching\s+M\b[\s\S]*$/i, '');
+    const sentences = beforeBrokenHeading
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean);
+    const uniqueSentences = Array.from(new Set(sentences));
+
+    return this.preview(uniqueSentences.join(' '), 1800);
+  }
+
+  private capitalizeWord(value: string) {
+    const normalized = value.toLowerCase();
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+
+  private extractCourseResources(text: string, fallbackResourceNames: string[]) {
+    const section = this.extractBetween(text, 'Course Resources', [
+      'Grading and Evaluation',
+      'Grading',
+      'Course Calendar',
+      'Course Policies',
+      'Matters Needing Attention',
+      'Academic Integrity',
+      'Prepared by',
+    ]);
+    const cleanedSection = section
+      .replace(/\s*□\s*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!cleanedSection) {
+      return fallbackResourceNames;
+    }
+
+    const labeledItems = this.splitResourceSection(cleanedSection);
+
+    return labeledItems.length ? labeledItems : [this.preview(cleanedSection, 900)];
+  }
+
+  private extractGradingItems(text: string) {
+    const section = this.extractBetween(text, 'Grading and Evaluation', [
+      'TOTAL',
+      'Course Calendar',
+      'Course Policies',
+      'Course Resources',
+      'Matters Needing Attention',
+      'Academic Integrity',
+      'Prepared by',
+    ]);
+
+    if (!section) {
+      return [];
+    }
+
+    const knownAssignments =
+      'Project|Midterm|Final|Quiz|Homework|Assignment|Presentation|Participation|Lab|Exam';
+    const normalized = section
+      .replace(/\bAssignment\s+Description\s+Scoring\s+Weight\s*\(%\)/i, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const rows = Array.from(
+      normalized.matchAll(
+        new RegExp(
+          `\\*\\s*(${knownAssignments})\\b\\s*([\\s\\S]*?)(?=\\s+\\*\\s*(?:${knownAssignments})\\b|\\s*$)`,
+          'gi',
+        ),
+      ),
+    );
+
+    return rows
+      .map((match) => {
+        const label = match[1].trim();
+        const body = match[2].replace(/\s+/g, ' ').trim();
+        const valueMatch = this.extractTrailingScoreAndWeight(body);
+
+        if (!valueMatch) {
+          return null;
+        }
+
+        const { description, scoring, weight } = valueMatch;
+
+        return {
+          label,
+          value: weight,
+          description: `${description} | ${scoring} | ${weight}`,
+        };
+      })
+      .filter(
+        (item): item is { label: string; value: string; description: string } =>
+          Boolean(item),
+      );
+  }
+
+  private extractTrailingScoreAndWeight(value: string) {
+    const numericTail = value.match(
+      /((?:\s+\d+(?:\.\d+)?){2,4})\s*%?\s*$/,
+    );
+
+    if (!numericTail || numericTail.index === undefined) {
+      return null;
+    }
+
+    const description = value.slice(0, numericTail.index).trim();
+    const numbers = numericTail[1].trim().split(/\s+/);
+
+    if (numbers.length < 2) {
+      return null;
+    }
+
+    const usableNumbers =
+      numbers.length >= 3 &&
+      numbers[numbers.length - 1].length === 1 &&
+      Number(numbers[numbers.length - 2]) > 9
+        ? numbers.slice(0, -1)
+        : numbers;
+    const last = usableNumbers[usableNumbers.length - 1];
+    const previous = usableNumbers[usableNumbers.length - 2];
+    const weight =
+      usableNumbers.length >= 3 && /^\d$/.test(previous) && /^\d$/.test(last)
+        ? `${previous}${last}`
+        : last;
+    const scoring =
+      usableNumbers.length >= 3 && /^\d$/.test(previous) && /^\d$/.test(last)
+        ? usableNumbers[usableNumbers.length - 3]
+        : previous;
+
+    return {
+      description,
+      scoring,
+      weight: `${weight}%`,
+    };
+  }
+
+  private splitResourceSection(section: string) {
+    const normalized = section.replace(/\s+/g, ' ').trim();
+    const labelMatches = Array.from(
+      normalized.matchAll(
+        /\b(Textbook|Book|References?|Slides?|Lecture Notes?|Required Readings?|Readings?|Course Materials?|Materials?)\s*:/gi,
+      ),
+    );
+
+    if (!labelMatches.length) {
+      return [];
+    }
+
+    return labelMatches
+      .map((match, index) => {
+        const start = match.index ?? 0;
+        const next = labelMatches[index + 1];
+        const end = next?.index ?? normalized.length;
+
+        return this.preview(normalized.slice(start, end).trim(), 900);
+      })
+      .filter(Boolean);
+  }
+
+  private extractCourseObjectives(text: string) {
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    const startMatch = normalizedText.match(/Course\s+Objective\s*s\b/i);
+
+    if (!startMatch || startMatch.index === undefined) {
+      return this.extractBetween(normalizedText, 'Course Objectives', [
+        'Course Learning Outcomes',
+      ]);
+    }
+
+    const start = startMatch.index + startMatch[0].length;
+    const afterStart = normalizedText.slice(start);
+    const endMatch = afterStart.match(
+      /\b(1\s+1\s+It\s+is\s+essential|Course\s+Learning\s+Outcomes|Contribution\s+of\s+the\s+Course|Course\s+Structure)\b/i,
+    );
+    const extracted = afterStart.slice(0, endMatch?.index ?? undefined).trim();
+
+    return extracted
+      .replace(/^[:\s-]+/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractPrerequisites(text: string) {
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    const startMatch = normalizedText.match(/\bPrerequisite\b/i);
+
+    if (!startMatch || startMatch.index === undefined) {
+      return '';
+    }
+
+    const start = startMatch.index + startMatch[0].length;
+    const afterStart = normalizedText.slice(start);
+    const endMatch = afterStart.match(
+      /\b(Course\s+Objective\s*s|Course\s+Learning\s+Outcomes|Contribution\s+of\s+the\s+Course|Course\s+Structure)\b/i,
+    );
+
+    return afterStart
+      .slice(0, endMatch?.index ?? undefined)
+      .replace(/^[:\s-]+/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractWeeklyTopics(text: string) {
+    const calendarText = this.extractCalendarSection(text);
+    const lines = calendarText
+      .split(/\n/)
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .filter(
+        (line) =>
+          !/^(course calendar|week\/place|course topic|to do|assignments?\s*&?\s*deadline\*?)$/i.test(
+            line,
+          ),
+      );
+    const rows: Array<{
+      weekNo: number;
+      lines: string[];
+    }> = [];
+    let current:
+      | {
+          weekNo: number;
+          lines: string[];
+        }
+      | null = null;
+
+    for (const line of lines) {
+      const weekMatch = line.match(/^(?:W|Week)\s*(\d{1,2})\b(.*)$/i);
+
+      if (weekMatch) {
+        if (current) rows.push(current);
+
+        current = {
+          weekNo: Number(weekMatch[1]),
+          lines: weekMatch[2]?.trim() ? [weekMatch[2].trim()] : [],
+        };
+        continue;
+      }
+
+      if (current) {
+        current.lines.push(line);
+      }
+    }
+
+    if (current) rows.push(current);
+
+    const parsedRows = rows
+      .filter((row) => row.weekNo >= 1 && row.weekNo <= 15)
+      .map((row) => this.parseCalendarRow(row.weekNo, row.lines));
+
+    if (parsedRows.length >= 10) {
+      return parsedRows;
+    }
+
+    const collapsedRows = this.extractCollapsedWeeklyTopics(calendarText);
+
+    if (collapsedRows.length) {
+      return collapsedRows;
+    }
+
+    return Array.from(
+      text.matchAll(/(?:week|w)\s*(\d{1,2})\s*[:.-]?\s*([^.;\n]{5,160})/gi),
+    )
+      .filter((match) => {
+        const weekNo = Number(match[1]);
+        return weekNo >= 1 && weekNo <= 15;
+      })
+      .slice(0, 15)
+      .map((match) => ({
+        weekNo: Number(match[1]),
+        place: '',
+        topic: match[2].trim(),
+        details: '',
+        todo: '',
+      }));
+  }
+
+  private extractCollapsedWeeklyTopics(text: string) {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const markers = Array.from(
+      normalized.matchAll(/(?:^|\s)(?:W|Week)\s*(\d{1,2})\b/gi),
+    )
+      .map((match) => ({
+        weekNo: Number(match[1]),
+        index: match.index ?? 0,
+        markerLength: match[0].length,
+      }))
+      .filter((marker) => marker.weekNo >= 1 && marker.weekNo <= 15);
+
+    return markers.map((marker, index) => {
+      const nextMarker = markers[index + 1];
+      const segment = normalized
+        .slice(
+          marker.index + marker.markerLength,
+          nextMarker?.index ?? normalized.length,
+        )
+        .trim();
+
+      return this.parseCollapsedCalendarRow(marker.weekNo, segment);
+    });
+  }
+
+  private parseCollapsedCalendarRow(weekNo: number, segment: string) {
+    const placeMatch = segment.match(/^(?:\d+\s+)?(f2f|online|hybrid)\b/i);
+    const place = placeMatch ? this.normalizeCalendarPlace(placeMatch[1]) : '';
+    const withoutPlace = segment
+      .replace(/^\d+\s+/, '')
+      .replace(/^(f2f|online|hybrid)\b/i, '')
+      .replace(/\b(matters\s+needing\s+attention|academic\s+integrity|course\s+policies|prepared\s+by)\b[\s\S]*$/i, '')
+      .trim();
+    const assignmentMatch = withoutPlace.match(
+      /\b(project\s+upload\s+#?\d*|assignments?\b|deadline\b|due\b)/i,
+    );
+    const beforeAssignment = assignmentMatch
+      ? withoutPlace.slice(0, assignmentMatch.index).trim()
+      : withoutPlace;
+    const details = assignmentMatch
+      ? withoutPlace.slice(assignmentMatch.index).trim()
+      : '';
+    const todoMatch = beforeAssignment.match(
+      /\s(-\s*[A-Za-z]|Read the course notes|Review\b|Prepare\b)/i,
+    );
+    const rawTopic = todoMatch
+      ? beforeAssignment.slice(0, todoMatch.index).trim()
+      : beforeAssignment;
+    const rawTodo = todoMatch
+      ? beforeAssignment.slice(todoMatch.index).trim()
+      : '';
+    const topic = rawTopic.replace(/\s+/g, ' ').trim();
+    const cleanedTopic = topic.replace(/\s+\d+\s*$/, '').trim();
+    const todo = rawTodo
+      .replace(/\s*-\s*/g, '; ')
+      .replace(/^;\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const cleaned = this.cleanCalendarTopicAndTodo(cleanedTopic, todo);
+
+    return {
+      weekNo,
+      place,
+      topic: cleaned.topic || 'Not published yet',
+      details,
+      todo: cleaned.todo,
+    };
+  }
+
+  private extractCalendarSection(text: string) {
+    const normalized = text.replace(/\r/g, '');
+    const startMatch = normalized.match(/course\s+calendar/i);
+
+    if (startMatch?.index === undefined) {
+      return normalized;
+    }
+
+    const start = startMatch.index;
+    const afterStart = normalized.slice(start);
+    const endMatch = afterStart.match(
+      /\b(matters\s+needing\s+attention|academic\s+integrity|course\s+policies|prepared\s+by)\b/i,
+    );
+
+    return endMatch?.index ? afterStart.slice(0, endMatch.index) : afterStart;
+  }
+
+  private parseCalendarRow(weekNo: number, rowLines: string[]) {
+    const place =
+      rowLines.find((line) => /^(f2f|online|hybrid)$/i.test(line.trim())) ||
+      '';
+    const content = rowLines
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !/^(f2f|online|hybrid)$/i.test(line))
+      .filter((line) => !/^\d+$/.test(line));
+
+    const assignmentStart = content.findIndex(
+      (line, index) =>
+        index > 0 &&
+        /(project\s+upload|assignment|deadline|due|upload\s+#|final\s+version)/i.test(
+          line,
+        ),
+    );
+    const topicAndTodo =
+      assignmentStart >= 0 ? content.slice(0, assignmentStart) : content;
+    const assignmentLines =
+      assignmentStart >= 0 ? content.slice(assignmentStart) : [];
+    const firstTodoIndex = topicAndTodo.findIndex((line, index) => {
+      if (index === 0) return false;
+
+      return /^-/.test(line) || /read|review|prepare|course schedule|expectation/i.test(line);
+    });
+    const topicLines =
+      firstTodoIndex >= 0 ? topicAndTodo.slice(0, firstTodoIndex) : topicAndTodo;
+    const todoLines =
+      firstTodoIndex >= 0 ? topicAndTodo.slice(firstTodoIndex) : [];
+    const topic = topicLines.join(' ').replace(/\s+/g, ' ').trim();
+    const todo = todoLines
+      .join(' ')
+      .replace(/\s*-\s*/g, '; ')
+      .replace(/^;\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const details = assignmentLines.join(' ').replace(/\s+/g, ' ').trim();
+    const cleaned = this.cleanCalendarTopicAndTodo(topic, todo);
+
+    return {
+      weekNo,
+      place: this.normalizeCalendarPlace(place),
+      topic: cleaned.topic || 'Not published yet',
+      details,
+      todo: cleaned.todo,
+    };
+  }
+
+  private cleanCalendarTopicAndTodo(topic: string, todo: string) {
+    const inlineTodoMatch = topic.match(
+      /^(.+?)\s+-\s+(Course\s+Schedule|Expectations|Review|Read\b|Prepare\b)(.+)?$/i,
+    );
+
+    if (!inlineTodoMatch) {
+      return { topic, todo };
+    }
+
+    const extractedTodo = [inlineTodoMatch[2], inlineTodoMatch[3] || '']
+      .join('')
+      .replace(/\s*-\s*/g, '; ')
+      .replace(/^;\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return {
+      topic: inlineTodoMatch[1].trim(),
+      todo: [todo, extractedTodo].filter(Boolean).join('; '),
+    };
+  }
+
+  private normalizeCalendarPlace(value: string) {
+    const normalized = value.trim().toLowerCase();
+
+    if (normalized === 'f2f') return 'F2F';
+    if (normalized === 'online') return 'Online';
+    if (normalized === 'hybrid') return 'Hybrid';
+
+    return '';
   }
 
   private keywordBoost(question: string, content: string) {

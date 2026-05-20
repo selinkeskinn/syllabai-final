@@ -10,6 +10,7 @@ import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import pdfParse from 'pdf-parse';
 import { AiProviderService } from '../ai/ai-provider.service';
+import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResourceResponseDto } from './dto/resource-response.dto';
 
@@ -28,6 +29,7 @@ export class ResourcesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiProvider: AiProviderService,
+    private readonly aiService: AiService,
   ) {}
 
   async findByCourse(
@@ -56,6 +58,7 @@ export class ResourcesService {
     file: UploadedResourceFile,
   ): Promise<ResourceResponseDto> {
     await this.ensureCourseOwner(courseId, instructorId);
+    this.aiService.invalidateCourseSyllabusSummary(courseId);
 
     const resource = await this.prisma.courseResource.create({
       data: {
@@ -104,6 +107,7 @@ export class ResourcesService {
     await this.prisma.courseResource.delete({
       where: { id: resource.id },
     });
+    this.aiService.invalidateCourseSyllabusSummary(courseId);
 
     try {
       await unlink(join(process.cwd(), 'uploads', 'resources', resource.storedName));
@@ -157,6 +161,7 @@ export class ResourcesService {
         where: { id: resourceId },
         data: { status: ResourceStatus.READY, errorMessage: null },
       });
+      this.aiService.invalidateCourseSyllabusSummary(courseId);
     } catch (error) {
       const message = this.resolveIndexingErrorMessage(error);
 

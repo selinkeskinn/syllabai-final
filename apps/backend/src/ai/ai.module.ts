@@ -9,6 +9,6 @@ import { ConfigModule } from '@nestjs/config';
   imports: [PrismaModule, ConfigModule],
   controllers: [AiController],
   providers: [AiService, AiProviderService],
-  exports: [AiProviderService],
+  exports: [AiProviderService, AiService],
 })
 export class AiModule {}

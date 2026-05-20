@@ -3,9 +3,43 @@ import { api } from "@/lib/api";
 export type SyllabusWeek = {
   id: string;
   weekNo: number;
+  place?: string | null;
   topic: string;
   details?: string | null;
   todo?: string | null;
+};
+
+export type SyllabusManualOverrides = {
+  instructorInfo?: {
+    office?: string;
+    officeHours?: string;
+    cvLink?: string;
+  };
+  courseInfo?: {
+    credits?: string;
+    classSchedule?: string;
+    classroom?: string;
+    deliveryMethod?: string;
+    courseType?: string;
+    prerequisites?: string;
+    courseObjectives?: string;
+  };
+  policySections?: {
+    communication?: string;
+    aiDigitalTools?: string;
+    deadlines?: string;
+    attendance?: string;
+    disabledStudentSupport?: string;
+    communicationEthics?: string;
+    privacyCopyright?: string;
+    academicIntegrity?: string;
+  };
+  moreInfo?: {
+    learningOutcomes?: string[];
+    contributionToProgram?: string;
+    courseStructure?: string;
+    teachingMethods?: string[];
+  };
 };
 
 export type Syllabus = {
@@ -16,6 +50,7 @@ export type Syllabus = {
   grading?: string | null;
   policies?: string | null;
   resources?: string | null;
+  manualOverrides?: SyllabusManualOverrides | null;
   weeks: SyllabusWeek[];
 
   documentFileName?: string | null;
@@ -35,6 +70,7 @@ export type CreateSyllabusPayload = {
   grading?: string;
   policies?: string;
   resources?: string;
+  manualOverrides?: SyllabusManualOverrides | null;
 };
 
 export type UpdateSyllabusPayload = {
@@ -43,6 +79,7 @@ export type UpdateSyllabusPayload = {
   grading?: string;
   policies?: string;
   resources?: string;
+  manualOverrides?: SyllabusManualOverrides | null;
 };
 
 export type SyllabusWeekPayload = {

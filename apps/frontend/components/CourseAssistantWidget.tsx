@@ -53,6 +53,13 @@ const getCourseIdFromPath = (pathname: string, role: "student" | "instructor") =
   return pathname.match(pattern)?.[1] ?? "";
 };
 
+const noIndexedResourcesMessage =
+  "No indexed resources yet. Upload a syllabus PDF to enable AI answers.";
+
+const formatResourceError = (message?: string | null) =>
+  message?.trim() ||
+  "PDF indexing failed. Please upload a text-based PDF and try again.";
+
 export default function CourseAssistantWidget({
   role,
 }: CourseAssistantWidgetProps) {
@@ -133,8 +140,32 @@ export default function CourseAssistantWidget({
     () => resources.filter((resource) => resource.status === "READY"),
     [resources]
   );
+  const processingResources = useMemo(
+    () => resources.filter((resource) => resource.status === "PROCESSING"),
+    [resources]
+  );
+  const failedResources = useMemo(
+    () => resources.filter((resource) => resource.status === "FAILED"),
+    [resources]
+  );
   const messages = messagesByCourse[selectedCourseId] ?? [];
   const assistantReady = readyResources.length > 0;
+  const assistantStatus = assistantReady
+    ? "Ready"
+    : loadingResources
+      ? "Checking"
+      : processingResources.length > 0
+        ? "Loading syllabus..."
+        : failedResources.length > 0
+          ? "Indexing failed"
+          : "No indexed resources yet";
+  const assistantEmptyText = assistantReady
+    ? "Ask from this course's PDFs."
+    : processingResources.length > 0
+      ? "Loading syllabus..."
+      : failedResources.length > 0
+        ? formatResourceError(failedResources[0]?.errorMessage)
+        : noIndexedResourcesMessage;
 
   const handleAsk = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -143,7 +174,7 @@ export default function CourseAssistantWidget({
     if (!selectedCourseId || !cleanQuestion || asking) return;
 
     if (!assistantReady) {
-      setError("No indexed PDF is ready for this course.");
+      setError(assistantEmptyText);
       return;
     }
 
@@ -250,11 +281,7 @@ export default function CourseAssistantWidget({
                   Status
                 </p>
                 <p className="mt-1 text-sm font-semibold text-slate-900">
-                  {assistantReady
-                    ? "Ready"
-                    : loadingResources
-                      ? "Checking"
-                      : "No ready PDF"}
+                  {assistantStatus}
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 p-3">
@@ -275,9 +302,7 @@ export default function CourseAssistantWidget({
                 <div className="flex items-start gap-3 rounded-lg bg-white p-3 text-sm text-slate-500">
                   <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                   <span>
-                    {assistantReady
-                      ? "Ask from this course's PDFs."
-                      : "Upload a text-based PDF for this course first."}
+                    {assistantEmptyText}
                   </span>
                 </div>
               ) : (
@@ -329,7 +354,7 @@ export default function CourseAssistantWidget({
                 onChange={(event) => setQuestion(event.target.value)}
                 disabled={!assistantReady || asking}
                 placeholder={
-                  assistantReady ? "Ask about this course..." : "AI is not ready"
+                  assistantReady ? "Ask about this course..." : assistantStatus
                 }
                 className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
               />

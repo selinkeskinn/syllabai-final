@@ -144,6 +144,7 @@ export class CoursesService {
         title: data.title,
         description: data.description,
         semester: data.semester,
+        deliveryMethod: data.deliveryMethod || 'In-Person',
         instructorId: data.instructorId,
         joinKey,
       },

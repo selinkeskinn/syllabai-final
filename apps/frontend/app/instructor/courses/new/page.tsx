@@ -34,6 +34,7 @@ export default function NewCoursePage() {
     title: "",
     description: "",
     semester: "",
+    deliveryMethod: "In-Person",
   });
 
   const [loading, setLoading] = useState(false);
@@ -41,7 +42,7 @@ export default function NewCoursePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const handleChange = (
-    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) => {
     setErrorMessage("");
     setFormData((prev) => ({
@@ -171,6 +172,27 @@ export default function NewCoursePage() {
                   className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                   placeholder="e.g., Spring 2026"
                 />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="course-delivery-method"
+                  className="mb-2 block text-sm font-medium text-slate-700"
+                >
+                  Delivery Method
+                </label>
+                <select
+                  id="course-delivery-method"
+                  name="deliveryMethod"
+                  required
+                  value={formData.deliveryMethod}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="In-Person">In-Person</option>
+                  <option value="Online">Online</option>
+                  <option value="Hybrid">Hybrid</option>
+                </select>
               </div>
 
               <div>
