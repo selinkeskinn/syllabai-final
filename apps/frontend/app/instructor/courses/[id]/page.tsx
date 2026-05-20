@@ -150,6 +150,7 @@ type OverrideSection =
   | "courseDetails"
   | "prerequisites"
   | "courseObjectives"
+  | "resources"
   | "grading"
   | "policy"
   | "learningOutcomes"
@@ -1505,6 +1506,18 @@ export default function InstructorCourseDetailPage() {
       return;
     }
 
+    if (section === "resources") {
+      setOverrideEditor({
+        section,
+        title: "Edit Course Resources",
+        fields: [makeTextArea("resources", "Course Resources")],
+      });
+      setOverrideForm({
+        resources: displayedResourcesText,
+      });
+      return;
+    }
+
     if (section === "grading") {
       const rows = gradingRows.length
         ? gradingRows.map((row, index) => {
@@ -1648,6 +1661,34 @@ export default function InstructorCourseDetailPage() {
     event.preventDefault();
 
     if (!overrideEditor) return;
+
+    if (overrideEditor.section === "resources") {
+      try {
+        setSavingOverride(true);
+        setOverrideMessage("");
+
+        const resources = overrideForm.resources?.trim() || "";
+        const updated = resolvedSyllabus?.id
+          ? await syllabusService.updateSyllabus(resolvedSyllabus.id, {
+              resources,
+            })
+          : await syllabusService.createSyllabus({
+              courseId,
+              title: `${course?.code || "Course"} Syllabus`,
+              resources,
+            });
+
+        syncSyllabusState(updated);
+        setOverrideEditor(null);
+        setOverrideForm({});
+      } catch (error) {
+        console.error("Resources save error:", error);
+        setOverrideMessage("Course resources could not be saved.");
+      } finally {
+        setSavingOverride(false);
+      }
+      return;
+    }
 
     if (overrideEditor.section === "grading") {
       try {
@@ -1943,8 +1984,9 @@ export default function InstructorCourseDetailPage() {
                   <FileText className="h-5 w-5 text-blue-600" />
                 </Link>
 
-                <Link
-                  href={`/instructor/courses/${course.id}/syllabus/edit`}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("grading")}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
@@ -1956,10 +1998,11 @@ export default function InstructorCourseDetailPage() {
                     </p>
                   </div>
                   <Bot className="h-5 w-5 text-blue-600" />
-                </Link>
+                </button>
 
-                <Link
-                  href={`/instructor/courses/${course.id}/syllabus/edit`}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("calendar")}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
@@ -1971,7 +2014,7 @@ export default function InstructorCourseDetailPage() {
                     </p>
                   </div>
                   <Calendar className="h-5 w-5 text-blue-600" />
-                </Link>
+                </button>
               </div>
 
               {activeTab === "overview" && (
@@ -2330,18 +2373,10 @@ export default function InstructorCourseDetailPage() {
                   </div>
 
                   <div className="p-8">
-                    <div className="mb-6 flex items-center justify-between">
+                    <div className="mb-6">
                       <h3 className="text-lg font-semibold text-slate-900">
                         Important Information
                       </h3>
-
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
-                        className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                        <span className="text-sm">Edit</span>
-                      </Link>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -2856,13 +2891,14 @@ export default function InstructorCourseDetailPage() {
                       <h3 className="text-lg font-semibold text-slate-900">
                         Course Resources
                       </h3>
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("resources")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm font-medium">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     {isAiSyllabusLoading
@@ -3009,17 +3045,10 @@ export default function InstructorCourseDetailPage() {
                   )}
 
                   <div className="mt-8 px-8 pb-6 pt-6">
-                    <div className="mb-4 flex items-center justify-between">
+                    <div className="mb-4">
                       <h3 className="text-lg font-semibold text-slate-900">
                         Make-up Exam Rules
                       </h3>
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
-                        className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                        <span className="text-sm font-medium">Edit</span>
-                      </Link>
                     </div>
 
                     <div className="space-y-3">
