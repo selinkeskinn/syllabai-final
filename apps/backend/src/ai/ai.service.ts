@@ -300,7 +300,7 @@ Return this exact JSON shape:
   "officeHours": "office hour information if present"
 }
 
-Important: Course Calendar is a 15-week table in this syllabus format. Return exactly 15 weeklyTopics entries for weeks 1 through 15 when a Course Calendar table exists. Parse rows labeled W1, W2, ... W15 as week numbers.
+Important: Course Calendar is usually a 15-week table in this syllabus format. Return weeklyTopics entries for W1 through W15 when a Course Calendar table exists. Do not invent W16; the application adds the final exam week when W1-W15 are present.
 
 PDF text:
 ${context}`;
@@ -1124,7 +1124,7 @@ ${context}`;
       for (const item of items) {
         const weekNo = Number(item.weekNo);
 
-        if (!Number.isInteger(weekNo) || weekNo < 1 || weekNo > 15) {
+        if (!Number.isInteger(weekNo) || weekNo < 1 || weekNo > 16) {
           continue;
         }
 
@@ -1137,12 +1137,22 @@ ${context}`;
     const primaryByWeek = toWeekMap(primary);
     const fallbackByWeek = toWeekMap(fallback);
 
-    return Array.from({ length: 15 }, (_, index) => {
+    const hasCompleteCourseWeeks = Array.from(
+      { length: 15 },
+      (_, index) => index + 1,
+    ).every((weekNo) => fallbackByWeek.has(weekNo) || primaryByWeek.has(weekNo));
+    const weekCount = hasCompleteCourseWeeks ? 16 : 15;
+
+    return Array.from({ length: weekCount }, (_, index) => {
       const weekNo = index + 1;
       const fallbackItem = fallbackByWeek.get(weekNo);
       const primaryItem = primaryByWeek.get(weekNo);
       const fallbackTopic = fallbackItem?.topic || '';
       const primaryTopic = primaryItem?.topic || '';
+
+      if (weekNo === 16 && !fallbackItem && !primaryItem) {
+        return this.createFinalExamWeek();
+      }
 
       return {
         weekNo,
@@ -1156,6 +1166,16 @@ ${context}`;
         todo: fallbackItem?.todo || primaryItem?.todo || '',
       };
     });
+  }
+
+  private createFinalExamWeek() {
+    return {
+      weekNo: 16,
+      place: '',
+      topic: 'Final Exam Week',
+      details: 'Final exam schedule will be announced by the university.',
+      todo: 'Review all chapters and prepare for the final exam.',
+    };
   }
 
   private isUsefulCalendarValue(value: string) {
@@ -1702,27 +1722,27 @@ ${context}`;
     if (current) rows.push(current);
 
     const parsedRows = rows
-      .filter((row) => row.weekNo >= 1 && row.weekNo <= 15)
+      .filter((row) => row.weekNo >= 1 && row.weekNo <= 16)
       .map((row) => this.parseCalendarRow(row.weekNo, row.lines));
 
     if (parsedRows.length >= 10) {
-      return parsedRows;
+      return this.ensureFinalExamWeek(parsedRows);
     }
 
     const collapsedRows = this.extractCollapsedWeeklyTopics(calendarText);
 
     if (collapsedRows.length) {
-      return collapsedRows;
+      return this.ensureFinalExamWeek(collapsedRows);
     }
 
-    return Array.from(
+    const fallbackRows = Array.from(
       text.matchAll(/(?:week|w)\s*(\d{1,2})\s*[:.-]?\s*([^.;\n]{5,160})/gi),
     )
       .filter((match) => {
         const weekNo = Number(match[1]);
-        return weekNo >= 1 && weekNo <= 15;
+        return weekNo >= 1 && weekNo <= 16;
       })
-      .slice(0, 15)
+      .slice(0, 16)
       .map((match) => ({
         weekNo: Number(match[1]),
         place: '',
@@ -1730,6 +1750,28 @@ ${context}`;
         details: '',
         todo: '',
       }));
+
+    return this.ensureFinalExamWeek(fallbackRows);
+  }
+
+  private ensureFinalExamWeek(
+    weeks: CourseSyllabusSummary['weeklyTopics'],
+  ): CourseSyllabusSummary['weeklyTopics'] {
+    const weekNos = new Set(
+      weeks
+        .map((week) => Number(week.weekNo))
+        .filter((weekNo) => Number.isInteger(weekNo)),
+    );
+    const hasCompleteCourseWeeks = Array.from(
+      { length: 15 },
+      (_, index) => index + 1,
+    ).every((weekNo) => weekNos.has(weekNo));
+
+    if (!hasCompleteCourseWeeks || weekNos.has(16)) {
+      return weeks;
+    }
+
+    return [...weeks, this.createFinalExamWeek()];
   }
 
   private extractCollapsedWeeklyTopics(text: string) {
@@ -1742,7 +1784,7 @@ ${context}`;
         index: match.index ?? 0,
         markerLength: match[0].length,
       }))
-      .filter((marker) => marker.weekNo >= 1 && marker.weekNo <= 15);
+      .filter((marker) => marker.weekNo >= 1 && marker.weekNo <= 16);
 
     return markers.map((marker, index) => {
       const nextMarker = markers[index + 1];

@@ -384,6 +384,20 @@ const renderSyllabusLoading = () => (
 const noIndexedResourcesMessage =
   "No indexed resources yet. Upload a syllabus PDF to enable AI answers.";
 
+const hasCompleteCourseWeeks = (weeks: Array<{ weekNo?: number | null }>) =>
+  Array.from({ length: 15 }, (_, index) => index + 1).every((weekNo) =>
+    weeks.some((week) => week.weekNo === weekNo)
+  );
+
+const createFinalExamWeek = (): SyllabusWeek => ({
+  id: "auto-final-week-16",
+  weekNo: 16,
+  place: null,
+  topic: "Final Exam Week",
+  details: "Final exam schedule will be announced by the university.",
+  todo: "Review all chapters and prepare for the final exam.",
+});
+
 export default function CourseDetailPage() {
   const params = useParams();
   const courseId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -649,12 +663,19 @@ export default function CourseDetailPage() {
     })
   );
   const savedWeeks = resolvedSyllabus?.weeks ?? [];
+  const shouldShowFinalExamWeek =
+    hasCompleteCourseWeeks(savedWeeks) || hasCompleteCourseWeeks(aiWeeks);
+  const calendarWeekCount = shouldShowFinalExamWeek ? 16 : 15;
   const syllabusWeeks: SyllabusWeek[] = Array.from(
-    { length: 15 },
+    { length: calendarWeekCount },
     (_, index) => {
       const weekNo = index + 1;
       const savedWeek = savedWeeks.find((week) => week.weekNo === weekNo);
       const aiWeek = aiWeeks.find((week) => week.weekNo === weekNo);
+
+      if (weekNo === 16 && !savedWeek && !aiWeek) {
+        return createFinalExamWeek();
+      }
 
       return (
         savedWeek ||

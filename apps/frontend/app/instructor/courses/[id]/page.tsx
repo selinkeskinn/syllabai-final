@@ -527,6 +527,24 @@ const renderSyllabusLoading = () => (
 const noIndexedResourcesMessage =
   "No indexed resources yet. Upload a syllabus PDF to enable AI answers.";
 
+const hasCompleteCourseWeeks = (weeks: Array<{ weekNo?: number | null }>) =>
+  Array.from({ length: 15 }, (_, index) => index + 1).every((weekNo) =>
+    weeks.some((week) => week.weekNo === weekNo)
+  );
+
+const createFinalExamWeek = (): DisplayWeek => ({
+  id: "auto-final-week-16",
+  weekNo: 16,
+  place: null,
+  topic: "Final Exam Week",
+  details: "Final exam schedule will be announced by the university.",
+  todo: "Review all chapters and prepare for the final exam.",
+});
+
+const isGeneratedWeek = (week: DisplayWeek) =>
+  String(week.id).startsWith("ai-week-") ||
+  String(week.id).startsWith("auto-final-week-");
+
 export default function InstructorCourseDetailPage() {
   const params = useParams();
   const courseId = params.id as string;
@@ -766,12 +784,19 @@ export default function InstructorCourseDetailPage() {
       todo: week.todo,
     })
   );
+  const shouldShowFinalExamWeek =
+    hasCompleteCourseWeeks(savedWeekItems) || hasCompleteCourseWeeks(aiWeekItems);
+  const calendarWeekCount = shouldShowFinalExamWeek ? 16 : 15;
   const displayedWeeks: DisplayWeek[] = Array.from(
-    { length: 15 },
+    { length: calendarWeekCount },
     (_, index) => {
       const weekNo = index + 1;
       const savedWeek = savedWeekItems.find((week) => week.weekNo === weekNo);
       const aiWeek = aiWeekItems.find((week) => week.weekNo === weekNo);
+
+      if (weekNo === 16 && !savedWeek && !aiWeek) {
+        return createFinalExamWeek();
+      }
 
       return (
         savedWeek ||
@@ -819,12 +844,12 @@ export default function InstructorCourseDetailPage() {
     }
 
     const savedWeekNos = new Set(savedWeekItems.map((week) => week.weekNo));
-    const nextWeekNo = Array.from({ length: 15 }, (_, index) => index + 1).find(
+    const nextWeekNo = Array.from({ length: 16 }, (_, index) => index + 1).find(
       (weekNo) => !savedWeekNos.has(weekNo)
     );
 
     if (!nextWeekNo) {
-      setWeekMessage("All 15 calendar weeks already exist.");
+      setWeekMessage("All 16 calendar weeks already exist.");
       return;
     }
 
@@ -838,8 +863,8 @@ export default function InstructorCourseDetailPage() {
   };
 
   const openEditWeekModal = (week: DisplayWeek) => {
-    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
-      setWeekMessage("AI generated weeks cannot be edited directly.");
+    if (!resolvedSyllabus?.id || isGeneratedWeek(week)) {
+      setWeekMessage("Generated weeks cannot be edited directly.");
       return;
     }
 
@@ -925,8 +950,8 @@ export default function InstructorCourseDetailPage() {
   };
 
   const handleDeleteWeek = async (week: DisplayWeek) => {
-    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
-      setWeekMessage("AI generated weeks cannot be deleted directly.");
+    if (!resolvedSyllabus?.id || isGeneratedWeek(week)) {
+      setWeekMessage("Generated weeks cannot be deleted directly.");
       return;
     }
 
@@ -2548,7 +2573,7 @@ export default function InstructorCourseDetailPage() {
                                         <button
                                           type="button"
                                           onClick={() => openEditWeekModal(week)}
-                                          disabled={String(week.id).startsWith("ai-week-")}
+                                          disabled={isGeneratedWeek(week)}
                                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                           <Edit2 className="h-3.5 w-3.5" />
@@ -2560,7 +2585,7 @@ export default function InstructorCourseDetailPage() {
                                           onClick={() => handleDeleteWeek(week)}
                                           disabled={
                                             deletingWeekId === week.id ||
-                                            String(week.id).startsWith("ai-week-")
+                                            isGeneratedWeek(week)
                                           }
                                           className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
