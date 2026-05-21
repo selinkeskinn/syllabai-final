@@ -159,11 +159,20 @@ export class CoursesController {
     return this.coursesService.update(id, body, req.user.userId);
   }
 
+  @Delete(':id/enrollment')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('STUDENT')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Leave an enrolled course (student only)' })
+  leaveCourse(@Param('id') id: string, @Request() req: any) {
+    return this.coursesService.leaveCourse(req.user.userId, id);
+  }
+
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('INSTRUCTOR')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete a course (instructor only)' })
+  @ApiOperation({ summary: 'Archive a course (instructor only)' })
   delete(@Param('id') id: string, @Request() req: any) {
     return this.coursesService.delete(id, req.user.userId);
   }

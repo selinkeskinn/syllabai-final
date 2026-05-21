@@ -16,6 +16,7 @@ export class CoursesService {
 
   findAll() {
     return this.prisma.course.findMany({
+      where: { archivedAt: null },
       include: {
         instructor: {
           select: { id: true, name: true, email: true, role: true },
@@ -27,8 +28,8 @@ export class CoursesService {
   }
 
   async findById(id: string) {
-    const course = await this.prisma.course.findUnique({
-      where: { id },
+    const course = await this.prisma.course.findFirst({
+      where: { id, archivedAt: null },
       include: {
         instructor: {
           select: { id: true, name: true, email: true, role: true },
@@ -48,7 +49,7 @@ export class CoursesService {
 
   findByInstructor(instructorId: string) {
     return this.prisma.course.findMany({
-      where: { instructorId },
+      where: { instructorId, archivedAt: null },
       include: {
         syllabus: true,
         _count: { select: { enrollments: true } },
@@ -59,7 +60,10 @@ export class CoursesService {
 
   async findEnrolled(userId: string) {
     const enrollments = await this.prisma.enrollment.findMany({
-      where: { userId },
+      where: {
+        userId,
+        course: { archivedAt: null },
+      },
       include: {
         course: {
           include: {
@@ -88,7 +92,7 @@ export class CoursesService {
     }
 
     const course = await this.prisma.course.findFirst({
-      where: { joinKey: normalizedJoinKey },
+      where: { joinKey: normalizedJoinKey, archivedAt: null },
       include: {
         instructor: {
           select: { id: true, name: true, email: true, role: true },
@@ -170,7 +174,38 @@ export class CoursesService {
     const course = await this.findById(id);
     this.assertCourseOwner(course.instructorId, instructorId);
 
-    return this.prisma.course.delete({ where: { id } });
+    return this.prisma.course.update({
+      where: { id },
+      data: { archivedAt: new Date() },
+      include: {
+        instructor: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+    });
+  }
+
+  async leaveCourse(userId: string, courseId: string) {
+    const enrollment = await this.prisma.enrollment.findFirst({
+      where: {
+        userId,
+        courseId,
+        course: { archivedAt: null },
+      },
+    });
+
+    if (!enrollment) {
+      throw new NotFoundException('Enrollment not found');
+    }
+
+    await this.prisma.enrollment.delete({
+      where: { id: enrollment.id },
+    });
+
+    return {
+      message: 'Left course successfully',
+      courseId,
+    };
   }
 
   private assertCourseOwner(ownerId: string, instructorId: string) {

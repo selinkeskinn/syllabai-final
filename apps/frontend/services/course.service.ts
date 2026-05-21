@@ -8,6 +8,7 @@ export type CourseSummary = {
   semester?: string | null;
   deliveryMethod?: string | null;
   joinKey?: string | null;
+  archivedAt?: string | null;
   instructor?: {
     id?: string;
     name?: string;
@@ -123,6 +124,18 @@ export const courseService = {
     }>
   ): Promise<CourseSummary> {
     const response = await api.patch(`/courses/${id}`, data);
+    return response.data;
+  },
+
+  async archiveCourse(id: string): Promise<CourseSummary> {
+    const response = await api.delete(`/courses/${id}`);
+    return response.data;
+  },
+
+  async leaveCourse(
+    id: string
+  ): Promise<{ message: string; courseId: string }> {
+    const response = await api.delete(`/courses/${id}/enrollment`);
     return response.data;
   },
 };

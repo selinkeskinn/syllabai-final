@@ -73,6 +73,7 @@ model Course {
   deliveryMethod String? @default("In-Person")
   instructorId String
   joinKey      String?      @unique
+  archivedAt   DateTime?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 

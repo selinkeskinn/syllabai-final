@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Layout from "@/components/Layout";
 import { courseService } from "@/services/course.service";
-import { Bell, KeyRound, Settings } from "lucide-react";
+import { LogOut } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import SettingsButton from "@/components/SettingsButton";
 
@@ -100,6 +100,7 @@ export default function CoursesPage() {
   const [joinError, setJoinError] = useState("");
   const [loading, setLoading] = useState(true);
   const [joining, setJoining] = useState(false);
+  const [leavingId, setLeavingId] = useState<string | null>(null);
 
   const fetchCourses = useCallback(async () => {
     try {
@@ -150,6 +151,32 @@ export default function CoursesPage() {
       setJoinMessage("");
     } finally {
       setJoining(false);
+    }
+  };
+
+  const handleLeaveCourse = async (course: any) => {
+    const confirmed = window.confirm(
+      `Leave "${course.code} - ${course.title}"? You can rejoin with the course key later.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setLeavingId(course.id);
+      setJoinError("");
+      setJoinMessage("");
+
+      await courseService.leaveCourse(course.id);
+      setCourses((currentCourses) =>
+        currentCourses.filter((item) => item.id !== course.id)
+      );
+      setJoinMessage(`${course.code} - ${course.title} has been removed.`);
+    } catch (error) {
+      console.error("Leave course error:", error);
+      setJoinError("Course could not be removed. Please try again.");
+      setJoinMessage("");
+    } finally {
+      setLeavingId(null);
     }
   };
 
@@ -243,6 +270,18 @@ export default function CoursesPage() {
             </div>
           </div>
 
+          {(joinMessage || joinError) && (
+            <div
+              className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
+                joinError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              }`}
+            >
+              {joinError || joinMessage}
+            </div>
+          )}
+
           {loading ? (
             <div className="rounded-xl border border-slate-200 bg-white p-6 text-slate-500">
               Loading courses...
@@ -257,10 +296,11 @@ export default function CoursesPage() {
               {courses.map((course, index) => {
                 const style = colorStyles[index % colorStyles.length];
 
+                const isLeaving = leavingId === course.id;
+
                 return (
-                  <Link
+                  <article
                     key={course.id}
-                    href={`/courses/${course.id}`}
                     className="group overflow-hidden rounded-xl border border-slate-200 bg-white transition-shadow hover:shadow-lg"
                   >
                     <div className={`${style.strip} h-3`} />
@@ -298,15 +338,25 @@ export default function CoursesPage() {
                         </div>
                       </div>
 
-                      <div className="flex justify-center border-t border-slate-200 pt-4">
-                        <span
+                      <div className="flex items-center justify-center gap-3 border-t border-slate-200 pt-4">
+                        <Link
+                          href={`/courses/${course.id}`}
                           className={`rounded-lg border-2 bg-transparent px-4 py-2 text-sm font-medium transition-colors ${style.border} ${style.text} ${style.buttonHover}`}
                         >
                           View Course
-                        </span>
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => handleLeaveCourse(course)}
+                          disabled={isLeaving}
+                          className="inline-flex items-center gap-2 rounded-lg border-2 border-slate-300 bg-transparent px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:border-red-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <LogOut className="h-4 w-4" />
+                          {isLeaving ? "Leaving..." : "Leave"}
+                        </button>
                       </div>
                     </div>
-                  </Link>
+                  </article>
                 );
               })}
             </div>
