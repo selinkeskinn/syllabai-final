@@ -70,8 +70,10 @@ model Course {
   title        String
   description  String?
   semester     String?
+  deliveryMethod String? @default("In-Person")
   instructorId String
   joinKey      String?      @unique
+  archivedAt   DateTime?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -92,6 +94,7 @@ model Syllabus {
   grading     String?
   policies    String?
   resources   String?
+  manualOverrides Json?
   documentFileName String?
   documentStoredFileName String?
   documentMimeType String?

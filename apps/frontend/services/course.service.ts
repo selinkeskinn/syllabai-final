@@ -6,7 +6,9 @@ export type CourseSummary = {
   title: string;
   description?: string | null;
   semester?: string | null;
+  deliveryMethod?: string | null;
   joinKey?: string | null;
+  archivedAt?: string | null;
   instructor?: {
     id?: string;
     name?: string;
@@ -81,6 +83,7 @@ export const courseService = {
     title: string;
     description: string;
     semester: string;
+    deliveryMethod?: string;
     file?: File | null;
   }) {
     if (data.file) {
@@ -89,6 +92,7 @@ export const courseService = {
       formData.append("title", data.title);
       formData.append("description", data.description);
       formData.append("semester", data.semester);
+      formData.append("deliveryMethod", data.deliveryMethod || "In-Person");
       formData.append("file", data.file);
 
       const response = await api.post("/courses", formData, {
@@ -105,7 +109,33 @@ export const courseService = {
       title: data.title,
       description: data.description,
       semester: data.semester,
+      deliveryMethod: data.deliveryMethod || "In-Person",
     });
+    return response.data;
+  },
+
+  async updateCourse(
+    id: string,
+    data: Partial<{
+      title: string;
+      description: string;
+      semester: string;
+      deliveryMethod: string;
+    }>
+  ): Promise<CourseSummary> {
+    const response = await api.patch(`/courses/${id}`, data);
+    return response.data;
+  },
+
+  async archiveCourse(id: string): Promise<CourseSummary> {
+    const response = await api.delete(`/courses/${id}`);
+    return response.data;
+  },
+
+  async leaveCourse(
+    id: string
+  ): Promise<{ message: string; courseId: string }> {
+    const response = await api.delete(`/courses/${id}/enrollment`);
     return response.data;
   },
 };

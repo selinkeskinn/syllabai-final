@@ -14,6 +14,7 @@ import {
   getSyllabusDescriptionText,
   getSyllabusDocumentMetadata,
   Syllabus,
+  SyllabusManualOverrides,
   syllabusService,
 } from "@/services/syllabus.service";
 import { api } from "@/lib/api";
@@ -75,6 +76,7 @@ type InstructorCourse = {
   code: string;
   title: string;
   semester?: string | null;
+  deliveryMethod?: string | null;
   description?: string | null;
   joinKey?: string | null;
   instructor?: {
@@ -115,6 +117,7 @@ type ResourceFile = {
 type DisplayWeek = {
   id: string;
   weekNo: number;
+  place?: string | null;
   topic: string;
   details?: string | null;
   todo?: string | null;
@@ -127,11 +130,42 @@ type WeekFormState = {
   todo: string;
 };
 
+type GradingFormRow = {
+  id: string;
+  assignment: string;
+  description: string;
+  scoring: string;
+  weight: string;
+};
+
 const emptyWeekForm: WeekFormState = {
   weekNo: "",
   topic: "",
   details: "",
   todo: "",
+};
+
+type OverrideSection =
+  | "instructorInfo"
+  | "courseDetails"
+  | "prerequisites"
+  | "courseObjectives"
+  | "resources"
+  | "grading"
+  | "policy"
+  | "learningOutcomes"
+  | "contribution"
+  | "courseStructure";
+
+type OverrideEditorState = {
+  section: OverrideSection;
+  title: string;
+  fields: Array<{
+    key: string;
+    label: string;
+    type?: "input" | "textarea" | "select";
+    options?: string[];
+  }>;
 };
 
 type GradingPieLabelProps = {
@@ -168,6 +202,36 @@ const policyTopics: { id: PolicyTab; label: string; group: "policies" | "ethics"
   { id: "privacy", label: "Privacy and Copyright", group: "policies" },
   { id: "academicIntegrity", label: "Academic Integrity, Cheating and Plagiarism", group: "ethics" },
 ];
+
+const policyOverrideKeyByTab: Record<
+  PolicyTab,
+  keyof NonNullable<SyllabusManualOverrides["policySections"]>
+> = {
+  communication: "communication",
+  aiTools: "aiDigitalTools",
+  deadlines: "deadlines",
+  attendance: "attendance",
+  disability: "disabledStudentSupport",
+  ethics: "communicationEthics",
+  privacy: "privacyCopyright",
+  academicIntegrity: "academicIntegrity",
+};
+
+const isValidExternalUrl = (value?: string | null) => {
+  if (!value) return false;
+
+  try {
+    if (value.includes("...")) return false;
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.hostname !== "..." &&
+      !url.hostname.includes("..")
+    );
+  } catch {
+    return false;
+  }
+};
 
 const formatDate = (value?: string | null) => {
   if (!value) return "Not available";
@@ -278,6 +342,21 @@ const extractPercentValue = (value?: string | null) => {
 
   const match = value.match(/(\d+(?:\.\d+)?)\s*%/);
   return match ? Number(match[1]) : 0;
+};
+
+const getGradingDisplayParts = (value?: string | null) => {
+  const rawValue = value?.trim() || "";
+  const [descriptionPart, scoringPart, weightPart] = rawValue
+    .split("|")
+    .map((part) => part.trim());
+  const detectedPercent = extractPercentValue(rawValue);
+  const description =
+    descriptionPart.replace(/\(?\d+(?:\.\d+)?\s*%\)?/g, "").trim() ||
+    "Assessment component from the syllabus";
+  const scoring = scoringPart || "0-100 points";
+  const weight = weightPart || (detectedPercent > 0 ? `${detectedPercent}%` : rawValue);
+
+  return { description, scoring, weight };
 };
 
 const getGradingChartData = (
@@ -439,6 +518,33 @@ const renderMultilineText = (value?: string | null) => {
   );
 };
 
+const renderSyllabusLoading = () => (
+  <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">
+    Loading syllabus...
+  </div>
+);
+
+const noIndexedResourcesMessage =
+  "No indexed resources yet. Upload a syllabus PDF to enable AI answers.";
+
+const hasCompleteCourseWeeks = (weeks: Array<{ weekNo?: number | null }>) =>
+  Array.from({ length: 15 }, (_, index) => index + 1).every((weekNo) =>
+    weeks.some((week) => week.weekNo === weekNo)
+  );
+
+const createFinalExamWeek = (): DisplayWeek => ({
+  id: "auto-final-week-16",
+  weekNo: 16,
+  place: null,
+  topic: "Final Exam Week",
+  details: "Final exam schedule will be announced by the university.",
+  todo: "Review all chapters and prepare for the final exam.",
+});
+
+const isGeneratedWeek = (week: DisplayWeek) =>
+  String(week.id).startsWith("ai-week-") ||
+  String(week.id).startsWith("auto-final-week-");
+
 export default function InstructorCourseDetailPage() {
   const params = useParams();
   const courseId = params.id as string;
@@ -476,6 +582,12 @@ export default function InstructorCourseDetailPage() {
   const [savingWeek, setSavingWeek] = useState(false);
   const [deletingWeekId, setDeletingWeekId] = useState<string | null>(null);
   const [weekMessage, setWeekMessage] = useState("");
+  const [overrideEditor, setOverrideEditor] =
+    useState<OverrideEditorState | null>(null);
+  const [overrideForm, setOverrideForm] = useState<Record<string, string>>({});
+  const [gradingFormRows, setGradingFormRows] = useState<GradingFormRow[]>([]);
+  const [savingOverride, setSavingOverride] = useState(false);
+  const [overrideMessage, setOverrideMessage] = useState("");
 
   const handleCopyJoinKey = async () => {
     if (!course?.joinKey) return;
@@ -567,12 +679,26 @@ export default function InstructorCourseDetailPage() {
     return () => window.clearInterval(intervalId);
   }, [aiResources, courseId]);
 
-  useEffect(() => {
-    const hasReadyResource = aiResources.some(
-      (resource) => resource.status === "READY"
-    );
+  const hasProcessingAiResource = aiResources.some(
+    (resource) => resource.status === "PROCESSING"
+  );
+  const readyAiResourceKey = aiResources
+    .filter((resource) => resource.status === "READY")
+    .map(
+      (resource) =>
+        `${resource.resourceId}:${resource.updatedAt}:${resource.chunkCount}`
+    )
+    .join("|");
+  const isAiSyllabusLoading =
+    loadingAiSummary || (hasProcessingAiResource && !aiSummary);
 
-    if (!hasReadyResource) return;
+  useEffect(() => {
+    if (hasProcessingAiResource) return;
+
+    if (!readyAiResourceKey) {
+      setAiSummary(null);
+      return;
+    }
 
     const fetchAiSummary = async () => {
       try {
@@ -587,7 +713,7 @@ export default function InstructorCourseDetailPage() {
     };
 
     fetchAiSummary();
-  }, [aiResources, courseId]);
+  }, [courseId, hasProcessingAiResource, readyAiResourceKey]);
 
   const resolvedSyllabus = syllabus ?? course?.syllabus ?? null;
   const syllabusDescription =
@@ -601,12 +727,21 @@ export default function InstructorCourseDetailPage() {
 
   const visibleAnnouncements = announcements.slice(0, 2);
   const visibleDeadlines = sortedDeadlines.slice(0, 3);
-  const manualGradingRows = getLabeledRows(resolvedSyllabus?.grading);
+  const savedGradingText = resolvedSyllabus?.grading || "";
+  const savedGradingLooksOverExtracted =
+    /See policy|Grading note|attendance is not going to be graded|relative grading system/i.test(
+      savedGradingText
+    );
+  const manualGradingRows = savedGradingLooksOverExtracted
+    ? []
+    : getLabeledRows(savedGradingText);
   const aiGradingRows =
     aiSummary?.gradingItems.map((item, index) => ({
       id: `${item.label || "grading"}-${index}`,
       label: item.label || `Component ${index + 1}`,
-      value: [item.value, item.description].filter(Boolean).join(" - "),
+      value: item.description?.includes("|")
+        ? item.description
+        : [item.description, item.value].filter(Boolean).join(" | "),
     })) ?? [];
   const gradingRows =
     manualGradingRows.length > 0 ? manualGradingRows : aiGradingRows;
@@ -619,25 +754,63 @@ export default function InstructorCourseDetailPage() {
   const readyResourceNamesText = readyAiResources
     .map((resource) => `Uploaded PDF: ${resource.resourceName}`)
     .join("\n");
+  const savedResourcesText = resolvedSyllabus?.resources || "";
+  const savedResourcesLooksOverExtracted =
+    /Course Learning Outcomes|Teaching Methods and Techniques Used in the Course|Course Policies/i.test(
+      savedResourcesText
+    );
   const displayedResourcesText =
-    resolvedSyllabus?.resources || aiResourcesText || readyResourceNamesText;
+    savedResourcesLooksOverExtracted && aiResourcesText
+      ? aiResourcesText
+      : savedResourcesText || aiResourcesText || readyResourceNamesText;
   const aiPoliciesText =
     aiSummary?.policies?.length ? aiSummary.policies.join("\n") : "";
-  const displayedWeeks: DisplayWeek[] = resolvedSyllabus?.weeks?.length
-    ? resolvedSyllabus.weeks.map((week) => ({
-        id: week.id,
-        weekNo: week.weekNo,
-        topic: week.topic,
-        details: week.details,
-        todo: week.todo,
-      }))
-    : (aiSummary?.weeklyTopics ?? []).map((week, index) => ({
-        id: `ai-week-${week.weekNo ?? index + 1}`,
-        weekNo: week.weekNo ?? index + 1,
-        topic: week.topic || "Topic from uploaded PDF",
-        details: week.details,
-        todo: week.todo,
-      }));
+  const savedWeekItems: DisplayWeek[] =
+    resolvedSyllabus?.weeks?.map((week) => ({
+      id: week.id,
+      weekNo: week.weekNo,
+      place: week.place,
+      topic: week.topic,
+      details: week.details,
+      todo: week.todo,
+    })) ?? [];
+  const aiWeekItems: DisplayWeek[] = (aiSummary?.weeklyTopics ?? []).map(
+    (week, index) => ({
+      id: `ai-week-${week.weekNo ?? index + 1}`,
+      weekNo: week.weekNo ?? index + 1,
+      place: week.place,
+      topic: week.topic || "Not published yet",
+      details: week.details,
+      todo: week.todo,
+    })
+  );
+  const shouldShowFinalExamWeek =
+    hasCompleteCourseWeeks(savedWeekItems) || hasCompleteCourseWeeks(aiWeekItems);
+  const calendarWeekCount = shouldShowFinalExamWeek ? 16 : 15;
+  const displayedWeeks: DisplayWeek[] = Array.from(
+    { length: calendarWeekCount },
+    (_, index) => {
+      const weekNo = index + 1;
+      const savedWeek = savedWeekItems.find((week) => week.weekNo === weekNo);
+      const aiWeek = aiWeekItems.find((week) => week.weekNo === weekNo);
+
+      if (weekNo === 16 && !savedWeek && !aiWeek) {
+        return createFinalExamWeek();
+      }
+
+      return (
+        savedWeek ||
+        aiWeek || {
+          id: `empty-week-${weekNo}`,
+          weekNo,
+          place: null,
+          topic: "Not published yet",
+          details: "",
+          todo: "",
+        }
+      );
+    }
+  );
 
   const syncWeekState = (weeks: DisplayWeek[]) => {
     const sortedWeeks = [...weeks].sort((a, b) => a.weekNo - b.weekNo);
@@ -670,10 +843,15 @@ export default function InstructorCourseDetailPage() {
       return;
     }
 
-    const nextWeekNo =
-      displayedWeeks.length > 0
-        ? Math.max(...displayedWeeks.map((week) => week.weekNo)) + 1
-        : 1;
+    const savedWeekNos = new Set(savedWeekItems.map((week) => week.weekNo));
+    const nextWeekNo = Array.from({ length: 16 }, (_, index) => index + 1).find(
+      (weekNo) => !savedWeekNos.has(weekNo)
+    );
+
+    if (!nextWeekNo) {
+      setWeekMessage("All 16 calendar weeks already exist.");
+      return;
+    }
 
     setEditingWeek(null);
     setWeekForm({
@@ -685,8 +863,8 @@ export default function InstructorCourseDetailPage() {
   };
 
   const openEditWeekModal = (week: DisplayWeek) => {
-    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
-      setWeekMessage("AI generated weeks cannot be edited directly.");
+    if (!resolvedSyllabus?.id || isGeneratedWeek(week)) {
+      setWeekMessage("Generated weeks cannot be edited directly.");
       return;
     }
 
@@ -772,8 +950,8 @@ export default function InstructorCourseDetailPage() {
   };
 
   const handleDeleteWeek = async (week: DisplayWeek) => {
-    if (!resolvedSyllabus?.id || String(week.id).startsWith("ai-week-")) {
-      setWeekMessage("AI generated weeks cannot be deleted directly.");
+    if (!resolvedSyllabus?.id || isGeneratedWeek(week)) {
+      setWeekMessage("Generated weeks cannot be deleted directly.");
       return;
     }
 
@@ -889,6 +1067,9 @@ export default function InstructorCourseDetailPage() {
         ]
       : []),
   ];
+  const failedResourceFiles = resourceFiles.filter(
+    (file) => file.status === "FAILED"
+  );
 
   const filteredResourceFiles = resourceFiles
     .filter((file) =>
@@ -1009,6 +1190,106 @@ export default function InstructorCourseDetailPage() {
     }
   };
 
+  const splitSummaryText = (value?: string | null) =>
+    value
+      ?.split(/\n|(?<=\.)\s+(?=[A-Z])/)
+      .map((line) => line.trim())
+      .filter(Boolean) ?? [];
+  const getSummaryParagraphs = (value: string | undefined, fallback: string[]) => {
+    const extracted = splitSummaryText(value);
+    return extracted.length ? extracted : fallback;
+  };
+  const aiInstructorInfo = aiSummary?.instructorInfo;
+  const aiCourseInfo = aiSummary?.courseInfo;
+  const aiPolicySections = aiSummary?.policySections;
+  const manualOverrides = resolvedSyllabus?.manualOverrides ?? {};
+  const displayedInstructorInfo = {
+    office:
+      manualOverrides.instructorInfo?.office || aiInstructorInfo?.office || "",
+    officeHours:
+      manualOverrides.instructorInfo?.officeHours ||
+      aiInstructorInfo?.officeHours ||
+      "",
+    cvLink:
+      manualOverrides.instructorInfo?.cvLink || aiInstructorInfo?.cvLink || "",
+  };
+  const displayedCourseInfo = {
+    credits: manualOverrides.courseInfo?.credits || aiCourseInfo?.credits || "",
+    classSchedule:
+      manualOverrides.courseInfo?.classSchedule ||
+      aiCourseInfo?.classSchedule ||
+      "",
+    classroom:
+      manualOverrides.courseInfo?.classroom || aiCourseInfo?.classroom || "",
+    deliveryMethod:
+      course?.deliveryMethod ||
+      manualOverrides.courseInfo?.deliveryMethod ||
+      "In-Person",
+    courseType:
+      manualOverrides.courseInfo?.courseType || aiCourseInfo?.courseType || "",
+    prerequisites:
+      manualOverrides.courseInfo?.prerequisites ||
+      aiCourseInfo?.prerequisites ||
+      "",
+    courseObjectives:
+      manualOverrides.courseInfo?.courseObjectives ||
+      aiCourseInfo?.courseObjectives ||
+      "",
+  };
+  const displayedPolicySections = {
+    communication:
+      manualOverrides.policySections?.communication ||
+      aiPolicySections?.communication ||
+      "",
+    aiDigitalTools:
+      manualOverrides.policySections?.aiDigitalTools ||
+      aiPolicySections?.aiDigitalTools ||
+      "",
+    deadlines:
+      manualOverrides.policySections?.deadlines ||
+      aiPolicySections?.deadlines ||
+      "",
+    attendance:
+      manualOverrides.policySections?.attendance ||
+      aiPolicySections?.attendance ||
+      "",
+    disabledStudentSupport:
+      manualOverrides.policySections?.disabledStudentSupport ||
+      aiPolicySections?.disabledStudentSupport ||
+      "",
+    communicationEthics:
+      manualOverrides.policySections?.communicationEthics ||
+      aiPolicySections?.communicationEthics ||
+      "",
+    privacyCopyright:
+      manualOverrides.policySections?.privacyCopyright ||
+      aiPolicySections?.privacyCopyright ||
+      "",
+    academicIntegrity:
+      manualOverrides.policySections?.academicIntegrity ||
+      aiPolicySections?.academicIntegrity ||
+      "",
+  };
+  const displayedMoreInfo = {
+    learningOutcomes:
+      manualOverrides.moreInfo?.learningOutcomes ||
+      aiSummary?.moreInfo?.learningOutcomes ||
+      [],
+    contributionToProgram:
+      manualOverrides.moreInfo?.contributionToProgram ||
+      aiSummary?.moreInfo?.contributionToProgram ||
+      "",
+    courseStructure:
+      manualOverrides.moreInfo?.courseStructure ||
+      aiSummary?.moreInfo?.courseStructure ||
+      "",
+    teachingMethods:
+      manualOverrides.moreInfo?.teachingMethods ||
+      aiSummary?.moreInfo?.teachingMethods ||
+      [],
+  };
+  const manualPolicyText = resolvedSyllabus?.policies || aiPoliciesText;
+
   const policySections: Record<
     PolicyTab,
     {
@@ -1020,81 +1301,78 @@ export default function InstructorCourseDetailPage() {
   > = {
     communication: {
       title: "Communication Channels and Methods",
-      paragraphs: resolvedSyllabus?.policies || aiPoliciesText
-        ? (resolvedSyllabus?.policies || aiPoliciesText)
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean)
-        : [
+      paragraphs: getSummaryParagraphs(
+        displayedPolicySections.communication || manualPolicyText,
+        [
             "Please use the university mail address for official course communication.",
             "All official course announcements will be posted through the course portal.",
             "Email responses can be expected within 24-48 hours during weekdays.",
-          ],
+        ],
+      ),
       noteTone: "blue",
       note: "For urgent matters during office hours, in-person visits are preferred over email communication.",
     },
     aiTools: {
       title: "Usage of AI & Digital Tools",
-      paragraphs: [
-        "The use of AI tools is permitted for learning purposes but must be properly disclosed in submissions.",
-        "Students must understand and be able to explain any code or content generated with AI assistance.",
-      ],
+      paragraphs: getSummaryParagraphs(displayedPolicySections.aiDigitalTools, [
+        "Digital tools may be used only according to the instructor's syllabus policy.",
+      ]),
       noteTone: "amber",
       note: "During exams and quizzes, all AI tools and digital assistance are prohibited unless explicitly stated otherwise.",
     },
     deadlines: {
       title: "Deadlines",
-      paragraphs: [
+      paragraphs: getSummaryParagraphs(displayedPolicySections.deadlines, [
         "All assignments must be submitted by the stated due date unless otherwise specified.",
         "Late submissions may be penalized according to the instructor's syllabus policy.",
         "Extension requests should be submitted before the deadline with valid justification.",
-      ],
+      ]),
       noteTone: "blue",
       note: "Plan ahead and start assignments early to avoid technical issues close to the deadline.",
     },
     attendance: {
       title: "Attendance",
-      paragraphs: [
+      paragraphs: getSummaryParagraphs(displayedPolicySections.attendance, [
         "Regular attendance is expected and will be tracked throughout the semester.",
         "Students should notify the instructor in advance when they are unable to attend.",
-      ],
+      ]),
       noteTone: "red",
       note: "Repeated unexcused absences may affect participation and course performance.",
     },
     disability: {
       title: "Disabled Student Support",
-      paragraphs: [
+      paragraphs: getSummaryParagraphs(displayedPolicySections.disabledStudentSupport, [
         "Students with disabilities are entitled to appropriate accommodations to ensure equal access to course materials and assessments.",
         "Please contact the university's Disability Support Services office to arrange accommodations.",
-      ],
+      ]),
       noteTone: "blue",
       note: "Accommodation requests will be handled confidentially and according to university policies.",
     },
     ethics: {
       title: "Oral and Written Communication Ethics",
-      paragraphs: [
+      paragraphs: getSummaryParagraphs(displayedPolicySections.communicationEthics, [
         "All written and oral communications must be respectful, professional, and free from plagiarism.",
         "Proper citation is required for all external sources used in assignments.",
-      ],
+      ]),
       noteTone: "amber",
       note: "Collaborative work is encouraged, but all submissions must represent your own understanding and effort.",
     },
     privacy: {
       title: "Privacy and Copyright",
-      paragraphs: [
+      paragraphs: getSummaryParagraphs(displayedPolicySections.privacyCopyright, [
         "Course materials are protected by copyright and are for personal educational use only.",
         "Recording lectures or sharing course materials outside the class without permission is prohibited.",
-      ],
+      ]),
       noteTone: "blue",
       note: "Respecting intellectual property rights is essential for maintaining academic integrity.",
     },
     academicIntegrity: {
       title: "Academic Integrity, Cheating and Plagiarism",
-      paragraphs: [
+      paragraphs: getSummaryParagraphs(displayedPolicySections.academicIntegrity, [
         "Academic integrity is fundamental to the educational process.",
         "Cheating includes unauthorized use of materials during exams and submitting work that is not your own.",
         "Plagiarism is the use of another person's ideas, words, or work without proper attribution.",
-      ],
+      ]),
       noteTone: "red",
       note: "Violations of academic integrity may result in disciplinary action according to university policies.",
     },
@@ -1107,12 +1385,11 @@ export default function InstructorCourseDetailPage() {
     red: "border-red-500 bg-red-50 text-red-900",
   }[activePolicy.noteTone];
 
-  const moreInfoLearningOutcomes = syllabusDescription
-    ? syllabusDescription
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-    : [
+  const moreInfoLearningOutcomes = displayedMoreInfo.learningOutcomes.length
+    ? displayedMoreInfo.learningOutcomes
+    : syllabusDescription
+      ? splitSummaryText(syllabusDescription)
+      : [
         "Describe the role of this course in the broader academic program.",
         "Understand the core concepts, expectations, and weekly learning structure.",
         "Apply course knowledge through assignments, deadlines, and class activities.",
@@ -1120,37 +1397,494 @@ export default function InstructorCourseDetailPage() {
         course?.description ||
           "Demonstrate understanding of the course objectives and assessment structure.",
       ];
+  const moreInfoLearningOutcomesText = moreInfoLearningOutcomes.join(" ");
 
-  const courseStructureItems = [
-    "Collaborative Learning",
-    "Discussion",
-    "Guest Speaker",
-    "Lecture",
-    "Observation",
-    "Problem Solving",
-    "Reading",
-    "Technology-Enhanced Learning",
-  ];
-
-  const prerequisiteItems = [
-    "Enrollment in the course workspace",
-    "Review of the official syllabus",
-    "Completion of required weekly tasks",
-  ];
-
-  const courseObjectiveItems = syllabusDescription
-    ? syllabusDescription
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(0, 5)
+  const courseStructureDescription =
+    displayedMoreInfo.courseStructure ||
+    "This course employs a variety of teaching and learning methods to ensure comprehensive understanding and practical application of course concepts.";
+  const courseStructureItems = displayedMoreInfo.teachingMethods.length
+    ? displayedMoreInfo.teachingMethods
     : [
-        course?.description ||
-          "Understand the course expectations, weekly plan, and assessment structure.",
-        "Follow course announcements, deadlines, resources, and grading requirements.",
-        "Apply course concepts through assignments, exams, projects, and weekly activities.",
-        "Use feedback and instructor communication channels effectively.",
+        "Collaborative Learning",
+        "Discussion",
+        "Guest Speaker",
+        "Lecture",
+        "Observation",
+        "Problem Solving",
+        "Reading",
+        "Technology-Enhanced Learning",
       ];
+
+  const prerequisiteItems = splitSummaryText(displayedCourseInfo.prerequisites).length
+    ? splitSummaryText(displayedCourseInfo.prerequisites)
+    : [
+        "Enrollment in the course workspace",
+        "Review of the official syllabus",
+        "Completion of required weekly tasks",
+      ];
+
+  const courseObjectiveItems = splitSummaryText(displayedCourseInfo.courseObjectives)
+    .length
+    ? splitSummaryText(displayedCourseInfo.courseObjectives).slice(0, 5)
+    : [
+        "Course objectives are defined by the instructor and official syllabus.",
+      ];
+
+  const syncSyllabusState = (updated: Syllabus) => {
+    const normalized = {
+      ...updated,
+      weeks: updated.weeks ?? resolvedSyllabus?.weeks ?? [],
+    };
+
+    setSyllabus(normalized);
+    setCourse((prev) =>
+      prev
+        ? {
+            ...prev,
+            syllabus: normalized,
+          }
+        : prev
+    );
+  };
+
+  const openOverrideEditor = (section: OverrideSection) => {
+    const makeInput = (key: string, label: string) => ({
+      key,
+      label,
+      type: "input" as const,
+    });
+    const makeTextArea = (key: string, label: string) => ({
+      key,
+      label,
+      type: "textarea" as const,
+    });
+
+    setOverrideMessage("");
+
+    if (section === "instructorInfo") {
+      setOverrideEditor({
+        section,
+        title: "Edit Instructor Information",
+        fields: [
+          makeInput("office", "Office"),
+          makeInput("officeHours", "Office Hours"),
+          makeInput("cvLink", "CV Link"),
+        ],
+      });
+      setOverrideForm({
+        office: displayedInstructorInfo.office,
+        officeHours: displayedInstructorInfo.officeHours,
+        cvLink: displayedInstructorInfo.cvLink,
+      });
+      return;
+    }
+
+    if (section === "courseDetails") {
+      setOverrideEditor({
+        section,
+        title: "Edit Course Details",
+        fields: [
+          makeInput("credits", "Credits"),
+          makeInput("classSchedule", "Class Schedule"),
+          makeInput("classroom", "Classroom"),
+          {
+            key: "deliveryMethod",
+            label: "Delivery Method",
+            type: "select",
+            options: ["In-Person", "Online", "Hybrid"],
+          },
+          makeInput("courseType", "Course Type"),
+        ],
+      });
+      setOverrideForm({
+        credits: displayedCourseInfo.credits,
+        classSchedule: displayedCourseInfo.classSchedule,
+        classroom: displayedCourseInfo.classroom,
+        deliveryMethod: displayedCourseInfo.deliveryMethod,
+        courseType: displayedCourseInfo.courseType,
+      });
+      return;
+    }
+
+    if (section === "prerequisites") {
+      setOverrideEditor({
+        section,
+        title: "Edit Prerequisites",
+        fields: [makeTextArea("prerequisites", "Prerequisites")],
+      });
+      setOverrideForm({
+        prerequisites: displayedCourseInfo.prerequisites || prerequisiteItems.join("\n"),
+      });
+      return;
+    }
+
+    if (section === "courseObjectives") {
+      setOverrideEditor({
+        section,
+        title: "Edit Course Objectives",
+        fields: [makeTextArea("courseObjectives", "Course Objectives")],
+      });
+      setOverrideForm({
+        courseObjectives:
+          displayedCourseInfo.courseObjectives || courseObjectiveItems.join("\n"),
+      });
+      return;
+    }
+
+    if (section === "resources") {
+      setOverrideEditor({
+        section,
+        title: "Edit Course Resources",
+        fields: [makeTextArea("resources", "Course Resources")],
+      });
+      setOverrideForm({
+        resources: displayedResourcesText,
+      });
+      return;
+    }
+
+    if (section === "grading") {
+      const rows = gradingRows.length
+        ? gradingRows.map((row, index) => {
+            const parts = getGradingDisplayParts(row.value);
+            return {
+              id: `${row.id}-${index}`,
+              assignment: row.label,
+              description: parts.description,
+              scoring: parts.scoring,
+              weight: parts.weight,
+            };
+          })
+        : [
+            {
+              id: `grading-${Date.now()}`,
+              assignment: "",
+              description: "",
+              scoring: "0-100 points",
+              weight: "",
+            },
+          ];
+
+      setOverrideEditor({
+        section,
+        title: "Edit Grading Breakdown",
+        fields: [],
+      });
+      setGradingFormRows(rows);
+      setOverrideForm({});
+      return;
+    }
+
+    if (section === "policy") {
+      setOverrideEditor({
+        section,
+        title: `Edit ${activePolicy.title}`,
+        fields: [makeTextArea("policyText", activePolicy.title)],
+      });
+      setOverrideForm({
+        policyText: activePolicy.paragraphs.join("\n"),
+      });
+      return;
+    }
+
+    if (section === "learningOutcomes") {
+      setOverrideEditor({
+        section,
+        title: "Edit Course Learning Outcomes",
+        fields: [makeTextArea("learningOutcomes", "Learning Outcomes")],
+      });
+      setOverrideForm({
+        learningOutcomes: moreInfoLearningOutcomes.join("\n"),
+      });
+      return;
+    }
+
+    if (section === "contribution") {
+      setOverrideEditor({
+        section,
+        title: "Edit Contribution to Program",
+        fields: [makeTextArea("contributionToProgram", "Contribution")],
+      });
+      setOverrideForm({
+        contributionToProgram:
+          displayedMoreInfo.contributionToProgram ||
+          aiSummary?.courseSummary ||
+          course?.description ||
+          "",
+      });
+      return;
+    }
+
+    if (section === "courseStructure") {
+      setOverrideEditor({
+        section,
+        title: "Edit Course Structure",
+        fields: [
+          makeTextArea("courseStructure", "Course Structure"),
+          makeTextArea("teachingMethods", "Teaching Methods"),
+        ],
+      });
+      setOverrideForm({
+        courseStructure: courseStructureDescription,
+        teachingMethods: courseStructureItems.join("\n"),
+      });
+      return;
+    }
+  };
+
+  const closeOverrideEditor = () => {
+    if (savingOverride) return;
+    setOverrideEditor(null);
+    setOverrideForm({});
+    setGradingFormRows([]);
+    setOverrideMessage("");
+  };
+
+  const updateOverrideForm = (key: string, value: string) => {
+    setOverrideForm((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const updateGradingFormRow = (
+    rowId: string,
+    key: keyof Omit<GradingFormRow, "id">,
+    value: string
+  ) => {
+    setGradingFormRows((rows) =>
+      rows.map((row) => (row.id === rowId ? { ...row, [key]: value } : row))
+    );
+  };
+
+  const addGradingFormRow = () => {
+    setGradingFormRows((rows) => [
+      ...rows,
+      {
+        id: `grading-${Date.now()}`,
+        assignment: "",
+        description: "",
+        scoring: "0-100 points",
+        weight: "",
+      },
+    ]);
+  };
+
+  const removeGradingFormRow = (rowId: string) => {
+    setGradingFormRows((rows) =>
+      rows.length > 1 ? rows.filter((row) => row.id !== rowId) : rows
+    );
+  };
+
+  const parseOverrideList = (value: string) =>
+    value
+      .split(/\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const handleOverrideSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!overrideEditor) return;
+
+    if (overrideEditor.section === "resources") {
+      try {
+        setSavingOverride(true);
+        setOverrideMessage("");
+
+        const resources = overrideForm.resources?.trim() || "";
+        const updated = resolvedSyllabus?.id
+          ? await syllabusService.updateSyllabus(resolvedSyllabus.id, {
+              resources,
+            })
+          : await syllabusService.createSyllabus({
+              courseId,
+              title: `${course?.code || "Course"} Syllabus`,
+              resources,
+            });
+
+        syncSyllabusState(updated);
+        setOverrideEditor(null);
+        setOverrideForm({});
+      } catch (error) {
+        console.error("Resources save error:", error);
+        setOverrideMessage("Course resources could not be saved.");
+      } finally {
+        setSavingOverride(false);
+      }
+      return;
+    }
+
+    if (overrideEditor.section === "grading") {
+      try {
+        setSavingOverride(true);
+        setOverrideMessage("");
+
+        const grading = gradingFormRows
+          .map((row) => ({
+            assignment: row.assignment.trim(),
+            description: row.description.trim(),
+            scoring: row.scoring.trim(),
+            weight: row.weight.trim(),
+          }))
+          .filter(
+            (row) =>
+              row.assignment || row.description || row.scoring || row.weight
+          )
+          .map((row, index) => {
+            const assignment = row.assignment || `Component ${index + 1}`;
+            const details = [row.description, row.scoring, row.weight]
+              .filter(Boolean)
+              .join(" | ");
+            return `${assignment}: ${details}`;
+          })
+          .join("\n");
+
+        const updated = resolvedSyllabus?.id
+          ? await syllabusService.updateSyllabus(resolvedSyllabus.id, {
+              grading,
+            })
+          : await syllabusService.createSyllabus({
+              courseId,
+              title: `${course?.code || "Course"} Syllabus`,
+              grading,
+            });
+
+        syncSyllabusState(updated);
+        setOverrideEditor(null);
+        setOverrideForm({});
+        setGradingFormRows([]);
+      } catch (error) {
+        console.error("Grading save error:", error);
+        setOverrideMessage("Grading could not be saved.");
+      } finally {
+        setSavingOverride(false);
+      }
+      return;
+    }
+
+    const currentOverrides = resolvedSyllabus?.manualOverrides ?? {};
+    const nextOverrides: SyllabusManualOverrides = {
+      ...currentOverrides,
+      instructorInfo: { ...currentOverrides.instructorInfo },
+      courseInfo: { ...currentOverrides.courseInfo },
+      policySections: { ...currentOverrides.policySections },
+      moreInfo: { ...currentOverrides.moreInfo },
+    };
+    let courseDeliveryMethodToSave: string | null = null;
+
+    if (overrideEditor.section === "instructorInfo") {
+      nextOverrides.instructorInfo = {
+        ...nextOverrides.instructorInfo,
+        office: overrideForm.office?.trim() || undefined,
+        officeHours: overrideForm.officeHours?.trim() || undefined,
+        cvLink: overrideForm.cvLink?.trim() || undefined,
+      };
+    }
+
+    if (overrideEditor.section === "courseDetails") {
+      const nextDeliveryMethod =
+        overrideForm.deliveryMethod?.trim() || "In-Person";
+      nextOverrides.courseInfo = {
+        ...nextOverrides.courseInfo,
+        credits: overrideForm.credits?.trim() || undefined,
+        classSchedule: overrideForm.classSchedule?.trim() || undefined,
+        classroom: overrideForm.classroom?.trim() || undefined,
+        deliveryMethod: nextDeliveryMethod,
+        courseType: overrideForm.courseType?.trim() || undefined,
+      };
+      courseDeliveryMethodToSave = nextDeliveryMethod;
+    }
+
+    if (overrideEditor.section === "prerequisites") {
+      nextOverrides.courseInfo = {
+        ...nextOverrides.courseInfo,
+        prerequisites: overrideForm.prerequisites?.trim() || undefined,
+      };
+    }
+
+    if (overrideEditor.section === "courseObjectives") {
+      nextOverrides.courseInfo = {
+        ...nextOverrides.courseInfo,
+        courseObjectives: overrideForm.courseObjectives?.trim() || undefined,
+      };
+    }
+
+    if (overrideEditor.section === "policy") {
+      const policyKey = policyOverrideKeyByTab[activePolicyTab];
+      nextOverrides.policySections = {
+        ...nextOverrides.policySections,
+        [policyKey]: overrideForm.policyText?.trim() || undefined,
+      };
+    }
+
+    if (overrideEditor.section === "learningOutcomes") {
+      nextOverrides.moreInfo = {
+        ...nextOverrides.moreInfo,
+        learningOutcomes: parseOverrideList(overrideForm.learningOutcomes || ""),
+      };
+    }
+
+    if (overrideEditor.section === "contribution") {
+      nextOverrides.moreInfo = {
+        ...nextOverrides.moreInfo,
+        contributionToProgram:
+          overrideForm.contributionToProgram?.trim() || undefined,
+      };
+    }
+
+    if (overrideEditor.section === "courseStructure") {
+      nextOverrides.moreInfo = {
+        ...nextOverrides.moreInfo,
+        courseStructure: overrideForm.courseStructure?.trim() || undefined,
+        teachingMethods: parseOverrideList(overrideForm.teachingMethods || ""),
+      };
+    }
+
+    try {
+      setSavingOverride(true);
+      setOverrideMessage("");
+
+      if (
+        course?.id &&
+        courseDeliveryMethodToSave &&
+        courseDeliveryMethodToSave !== course.deliveryMethod
+      ) {
+        const updatedCourse = await courseService.updateCourse(course.id, {
+          deliveryMethod: courseDeliveryMethodToSave,
+        });
+
+        setCourse((prev) =>
+          prev
+            ? {
+                ...prev,
+                deliveryMethod: updatedCourse.deliveryMethod,
+              }
+            : prev
+        );
+      }
+
+      const updated = resolvedSyllabus?.id
+        ? await syllabusService.updateSyllabus(resolvedSyllabus.id, {
+            manualOverrides: nextOverrides,
+          })
+        : await syllabusService.createSyllabus({
+            courseId,
+            title: `${course?.code || "Course"} Syllabus`,
+            manualOverrides: nextOverrides,
+          });
+
+      syncSyllabusState(updated);
+      setOverrideMessage("Changes saved.");
+      setOverrideEditor(null);
+      setOverrideForm({});
+    } catch (error) {
+      console.error("Manual override save error:", error);
+      setOverrideMessage("Changes could not be saved.");
+    } finally {
+      setSavingOverride(false);
+    }
+  };
 
   return (
     <InstructorLayout>
@@ -1275,8 +2009,9 @@ export default function InstructorCourseDetailPage() {
                   <FileText className="h-5 w-5 text-blue-600" />
                 </Link>
 
-                <Link
-                  href={`/instructor/courses/${course.id}/syllabus/edit`}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("grading")}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
@@ -1288,10 +2023,11 @@ export default function InstructorCourseDetailPage() {
                     </p>
                   </div>
                   <Bot className="h-5 w-5 text-blue-600" />
-                </Link>
+                </button>
 
-                <Link
-                  href={`/instructor/courses/${course.id}/syllabus/edit`}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("calendar")}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
@@ -1303,7 +2039,7 @@ export default function InstructorCourseDetailPage() {
                     </p>
                   </div>
                   <Calendar className="h-5 w-5 text-blue-600" />
-                </Link>
+                </button>
               </div>
 
               {activeTab === "overview" && (
@@ -1447,6 +2183,9 @@ export default function InstructorCourseDetailPage() {
               )}
 
               {activeTab === "instructor" && (
+                isAiSyllabusLoading ? (
+                  renderSyllabusLoading()
+                ) : (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="p-8">
                     <div className="mb-6 flex items-center justify-between">
@@ -1454,13 +2193,14 @@ export default function InstructorCourseDetailPage() {
                         Instructor Information
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("instructorInfo")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-6">
@@ -1474,7 +2214,7 @@ export default function InstructorCourseDetailPage() {
                       <div>
                         <p className="mb-1 text-xs text-slate-500">Office</p>
                         <p className="text-sm text-slate-900">
-                          Not published yet
+                          {displayedInstructorInfo.office || "Not published yet"}
                         </p>
                       </div>
 
@@ -1492,25 +2232,39 @@ export default function InstructorCourseDetailPage() {
                           Office Hours
                         </p>
                         <p className="text-sm text-slate-900">
-                          Not published yet
+                          {displayedInstructorInfo.officeHours ||
+                            "Not published yet"}
                         </p>
                       </div>
 
                       <div className="col-span-2">
                         <p className="mb-1 text-xs text-slate-500">CV</p>
-                        <a
-                          href="#"
-                          className="text-sm text-blue-600 hover:underline"
-                        >
-                          View Curriculum Vitae
-                        </a>
+                        {isValidExternalUrl(displayedInstructorInfo.cvLink) ? (
+                          <a
+                            href={displayedInstructorInfo.cvLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm text-blue-600 hover:underline"
+                          >
+                            View Curriculum Vitae
+                          </a>
+                        ) : (
+                          <p className="text-sm text-slate-900">
+                            {displayedInstructorInfo.cvLink ||
+                              "Not published yet"}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
                 </div>
+                )
               )}
 
               {activeTab === "courseInfo" && (
+                isAiSyllabusLoading ? (
+                  renderSyllabusLoading()
+                ) : (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="border-b border-slate-200 p-8">
                     <div className="mb-6 flex items-center justify-between">
@@ -1518,13 +2272,14 @@ export default function InstructorCourseDetailPage() {
                         Course Details
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("courseDetails")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-6">
@@ -1540,7 +2295,7 @@ export default function InstructorCourseDetailPage() {
                           Credits
                         </p>
                         <p className="text-sm text-slate-900">
-                          Not published yet
+                          {displayedCourseInfo.credits || "Not published yet"}
                         </p>
                       </div>
 
@@ -1549,7 +2304,8 @@ export default function InstructorCourseDetailPage() {
                           Class Schedule
                         </p>
                         <p className="text-sm text-slate-900">
-                          Not published yet
+                          {displayedCourseInfo.classSchedule ||
+                            "Not published yet"}
                         </p>
                       </div>
 
@@ -1558,7 +2314,7 @@ export default function InstructorCourseDetailPage() {
                           Classroom
                         </p>
                         <p className="text-sm text-slate-900">
-                          Not published yet
+                          {displayedCourseInfo.classroom || "Not published yet"}
                         </p>
                       </div>
 
@@ -1566,7 +2322,10 @@ export default function InstructorCourseDetailPage() {
                         <p className="mb-1 text-xs text-slate-500">
                           Delivery Method
                         </p>
-                        <p className="text-sm text-slate-900">In-Person</p>
+                        <p className="text-sm text-slate-900">
+                          {displayedCourseInfo.deliveryMethod ||
+                            "Not published yet"}
+                        </p>
                       </div>
 
                       <div>
@@ -1574,7 +2333,8 @@ export default function InstructorCourseDetailPage() {
                           Course Type
                         </p>
                         <p className="text-sm text-slate-900">
-                          {course.semester || "Spring 2026"}
+                          {displayedCourseInfo.courseType ||
+                            "Not published yet"}
                         </p>
                       </div>
                     </div>
@@ -1586,13 +2346,14 @@ export default function InstructorCourseDetailPage() {
                         Prerequisites
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("prerequisites")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <div className="space-y-3">
@@ -1611,13 +2372,14 @@ export default function InstructorCourseDetailPage() {
                         Course Objectives
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("courseObjectives")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <div className="space-y-3">
@@ -1636,18 +2398,10 @@ export default function InstructorCourseDetailPage() {
                   </div>
 
                   <div className="p-8">
-                    <div className="mb-6 flex items-center justify-between">
+                    <div className="mb-6">
                       <h3 className="text-lg font-semibold text-slate-900">
                         Important Information
                       </h3>
-
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
-                        className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                        <span className="text-sm">Edit</span>
-                      </Link>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1697,6 +2451,7 @@ export default function InstructorCourseDetailPage() {
                     </div>
                   </div>
                 </div>
+                )
               )}
 
               {activeTab === "calendar" && (
@@ -1738,9 +2493,9 @@ export default function InstructorCourseDetailPage() {
                     </div>
                   ) : null}
 
-                  {loadingSyllabus || loadingAiSummary ? (
+                  {loadingSyllabus || isAiSyllabusLoading ? (
                     <div className="p-8 text-sm text-slate-500">
-                      Loading calendar...
+                      Loading syllabus...
                     </div>
                   ) : displayedWeeks.length === 0 ? (
                     <div className="p-8 text-sm text-slate-500">
@@ -1777,7 +2532,7 @@ export default function InstructorCourseDetailPage() {
                                   week.topic,
                                   week.details
                                 );
-                                const place = getWeekPlace(week.weekNo);
+                                const place = week.place || getWeekPlace(week.weekNo);
 
                                 return (
                                   <tr
@@ -1818,7 +2573,7 @@ export default function InstructorCourseDetailPage() {
                                         <button
                                           type="button"
                                           onClick={() => openEditWeekModal(week)}
-                                          disabled={String(week.id).startsWith("ai-week-")}
+                                          disabled={isGeneratedWeek(week)}
                                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                           <Edit2 className="h-3.5 w-3.5" />
@@ -1830,7 +2585,7 @@ export default function InstructorCourseDetailPage() {
                                           onClick={() => handleDeleteWeek(week)}
                                           disabled={
                                             deletingWeekId === week.id ||
-                                            String(week.id).startsWith("ai-week-")
+                                            isGeneratedWeek(week)
                                           }
                                           className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
@@ -1947,6 +2702,16 @@ export default function InstructorCourseDetailPage() {
                     </div>
                   ) : null}
 
+                  {failedResourceFiles.length > 0 ? (
+                    <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>
+                        {failedResourceFiles[0]?.errorMessage ||
+                          "PDF indexing failed. Please upload a text-based PDF and try again."}
+                      </span>
+                    </div>
+                  ) : null}
+
                   <div className="mb-4">
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
@@ -2032,7 +2797,7 @@ export default function InstructorCourseDetailPage() {
                       </div>
                     ) : filteredResourceFiles.length === 0 ? (
                       <div className="px-4 py-6 text-sm text-slate-500">
-                        No uploaded documents found.
+                        {noIndexedResourcesMessage}
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-200">
@@ -2151,18 +2916,21 @@ export default function InstructorCourseDetailPage() {
                       <h3 className="text-lg font-semibold text-slate-900">
                         Course Resources
                       </h3>
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("resources")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm font-medium">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
-                    {loadingAiSummary
-                      ? renderMultilineText("Reading uploaded PDF resources...")
-                      : renderMultilineText(displayedResourcesText)}
+                    {isAiSyllabusLoading
+                      ? renderMultilineText("Loading syllabus...")
+                      : displayedResourcesText
+                        ? renderMultilineText(displayedResourcesText)
+                        : renderMultilineText(noIndexedResourcesMessage)}
                   </div>
                 </div>
               )}
@@ -2179,20 +2947,23 @@ export default function InstructorCourseDetailPage() {
                       </p>
                     </div>
 
-                    <Link
-                      href={`/instructor/courses/${course.id}/syllabus/edit`}
+                    <button
+                      type="button"
+                      onClick={() => openOverrideEditor("grading")}
                       className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                     >
                       <Edit2 className="h-4 w-4" />
                       <span className="text-sm font-medium">Edit</span>
-                    </Link>
+                    </button>
                   </div>
 
                   {gradingRows.length === 0 ? (
                     <div className="p-8 text-sm text-slate-500">
-                      {loadingAiSummary
-                        ? "Reading grading policy from uploaded PDF..."
-                        : "No grading information was found in the uploaded PDFs yet."}
+                      {isAiSyllabusLoading
+                        ? "Loading syllabus..."
+                        : readyAiResources.length === 0
+                          ? noIndexedResourcesMessage
+                          : "No grading information was found in the uploaded PDFs yet."}
                     </div>
                   ) : (
                     <>
@@ -2256,12 +3027,10 @@ export default function InstructorCourseDetailPage() {
                           </thead>
                           <tbody>
                             {gradingRows.map((row) => {
-                              const percent = extractPercentValue(row.value);
-                              const description =
-                                row.value
-                                  .replace(/\(?\d+(?:\.\d+)?\s*%\)?/g, "")
-                                  .trim() ||
-                                "Assessment component from the syllabus";
+                              const parts = getGradingDisplayParts(row.value);
+                              const percent = extractPercentValue(
+                                parts.weight || row.value
+                              );
 
                               return (
                                 <tr
@@ -2272,13 +3041,13 @@ export default function InstructorCourseDetailPage() {
                                     {row.label}
                                   </td>
                                   <td className="px-8 py-5 text-sm text-slate-600">
-                                    {description}
+                                    {parts.description}
                                   </td>
                                   <td className="px-8 py-5 text-sm text-slate-600">
-                                    0-100 points
+                                    {parts.scoring}
                                   </td>
                                   <td className="px-8 py-5 text-right text-sm font-semibold text-slate-900">
-                                    {percent > 0 ? `${percent}%` : row.value}
+                                    {percent > 0 ? `${percent}%` : parts.weight}
                                   </td>
                                 </tr>
                               );
@@ -2301,17 +3070,10 @@ export default function InstructorCourseDetailPage() {
                   )}
 
                   <div className="mt-8 px-8 pb-6 pt-6">
-                    <div className="mb-4 flex items-center justify-between">
+                    <div className="mb-4">
                       <h3 className="text-lg font-semibold text-slate-900">
                         Make-up Exam Rules
                       </h3>
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
-                        className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                        <span className="text-sm font-medium">Edit</span>
-                      </Link>
                     </div>
 
                     <div className="space-y-3">
@@ -2350,6 +3112,9 @@ export default function InstructorCourseDetailPage() {
               )}
 
               {activeTab === "policies" && (
+                isAiSyllabusLoading ? (
+                  renderSyllabusLoading()
+                ) : (
                 <div className="flex min-h-[600px] overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="flex-1 p-8">
                     <div className="mb-6 flex items-center justify-between">
@@ -2357,32 +3122,35 @@ export default function InstructorCourseDetailPage() {
                         {activePolicy.title}
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("policy")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm font-medium">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <div className="space-y-4">
-                      {activePolicy.paragraphs.map((paragraph) => (
-                        <p
-                          key={paragraph}
-                          className="text-sm leading-relaxed text-slate-700"
-                        >
-                          {paragraph}
-                        </p>
-                      ))}
+                      {activePolicy.paragraphs.map((paragraph) => {
+                        const isBullet = paragraph.startsWith("- ");
+                        const text = isBullet
+                          ? paragraph.replace(/^-\s*/, "")
+                          : paragraph;
 
-                      <div
-                        className={`mt-6 rounded-r-lg border-l-4 p-4 ${noteStyles}`}
-                      >
-                        <p className="text-sm">
-                          <strong>Note:</strong> {activePolicy.note}
-                        </p>
-                      </div>
+                        return (
+                          <p
+                            key={paragraph}
+                            className="text-sm leading-relaxed text-slate-700"
+                          >
+                            {isBullet ? (
+                              <span className="mr-2 text-slate-900">•</span>
+                            ) : null}
+                            {text}
+                          </p>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -2442,9 +3210,13 @@ export default function InstructorCourseDetailPage() {
                     </div>
                   </aside>
                 </div>
+                )
               )}
 
               {activeTab === "moreInfo" && (
+                isAiSyllabusLoading ? (
+                  renderSyllabusLoading()
+                ) : (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="border-b border-slate-200 p-8">
                     <div className="mb-6 flex items-center justify-between">
@@ -2452,24 +3224,19 @@ export default function InstructorCourseDetailPage() {
                         Course Learning Outcomes
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("learningOutcomes")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
-                    <p className="mb-4 text-slate-700">
-                      At the end of the course, you will be able to:
+                    <p className="leading-relaxed text-slate-700">
+                      {moreInfoLearningOutcomesText}
                     </p>
-
-                    <ol className="list-inside list-decimal space-y-2.5 text-slate-700">
-                      {moreInfoLearningOutcomes.map((item, index) => (
-                        <li key={`${item}-${index}`}>{item}</li>
-                      ))}
-                    </ol>
                   </div>
 
                   <div className="border-b border-slate-200 p-8">
@@ -2478,17 +3245,19 @@ export default function InstructorCourseDetailPage() {
                         Contribution of the Course to the Program
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("contribution")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <p className="leading-relaxed text-slate-700">
-                      {aiSummary?.courseSummary ||
+                      {displayedMoreInfo.contributionToProgram ||
+                        aiSummary?.courseSummary ||
                         course.description ||
                         "This course contributes to the program by helping students build practical knowledge, follow structured academic resources, complete course deliverables, and connect weekly learning outcomes with program-level expectations."}
                     </p>
@@ -2500,19 +3269,18 @@ export default function InstructorCourseDetailPage() {
                         Course Structure
                       </h3>
 
-                      <Link
-                        href={`/instructor/courses/${course.id}/syllabus/edit`}
+                      <button
+                        type="button"
+                        onClick={() => openOverrideEditor("courseStructure")}
                         className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         <Edit2 className="h-4 w-4" />
                         <span className="text-sm">Edit</span>
-                      </Link>
+                      </button>
                     </div>
 
                     <p className="mb-6 text-slate-700">
-                      This course employs a variety of teaching and learning
-                      methods to ensure comprehensive understanding and practical
-                      application of course concepts.
+                      {courseStructureDescription}
                     </p>
 
                     <div className="grid grid-cols-2 gap-x-8 gap-y-3 md:grid-cols-4">
@@ -2527,6 +3295,7 @@ export default function InstructorCourseDetailPage() {
                     </div>
                   </div>
                 </div>
+                )
               )}
             </main>
           </>
@@ -2639,6 +3408,195 @@ export default function InstructorCourseDetailPage() {
                   className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {savingWeek ? "Saving..." : "Save Week"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {overrideEditor ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <form
+            onSubmit={handleOverrideSubmit}
+            className={`max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white p-6 shadow-xl ${
+              overrideEditor.section === "grading" ? "max-w-5xl" : "max-w-2xl"
+            }`}
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">
+                  {overrideEditor.title}
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Manual changes override AI extracted values on this page.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeOverrideEditor}
+                className="rounded-lg p-2 transition hover:bg-slate-100"
+              >
+                <XCircle className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {overrideEditor.section === "grading" ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-[1fr_1.4fr_1fr_120px_36px] gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <span>Assignment</span>
+                    <span>Description</span>
+                    <span>Scoring</span>
+                    <span>Weight</span>
+                    <span />
+                  </div>
+
+                  {gradingFormRows.map((row) => (
+                    <div
+                      key={row.id}
+                      className="grid grid-cols-[1fr_1.4fr_1fr_120px_36px] gap-2"
+                    >
+                      <input
+                        type="text"
+                        value={row.assignment}
+                        onChange={(event) =>
+                          updateGradingFormRow(
+                            row.id,
+                            "assignment",
+                            event.target.value
+                          )
+                        }
+                        placeholder="Midterm"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        type="text"
+                        value={row.description}
+                        onChange={(event) =>
+                          updateGradingFormRow(
+                            row.id,
+                            "description",
+                            event.target.value
+                          )
+                        }
+                        placeholder="Exam or project description"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        type="text"
+                        value={row.scoring}
+                        onChange={(event) =>
+                          updateGradingFormRow(
+                            row.id,
+                            "scoring",
+                            event.target.value
+                          )
+                        }
+                        placeholder="0-100 points"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        type="text"
+                        value={row.weight}
+                        onChange={(event) =>
+                          updateGradingFormRow(
+                            row.id,
+                            "weight",
+                            event.target.value
+                          )
+                        }
+                        placeholder="30%"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeGradingFormRow(row.id)}
+                        disabled={gradingFormRows.length === 1}
+                        className="flex h-10 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Remove grading row"
+                      >
+                        <XCircle className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={addGradingFormRow}
+                    className="inline-flex items-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium text-blue-600 transition hover:bg-blue-50"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add Row
+                  </button>
+                </div>
+              ) : (
+                overrideEditor.fields.map((field) => (
+                <div key={field.key}>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    {field.label}
+                  </label>
+
+                  {field.type === "textarea" ? (
+                    <textarea
+                      rows={6}
+                      value={overrideForm[field.key] || ""}
+                      onChange={(event) =>
+                        updateOverrideForm(field.key, event.target.value)
+                      }
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    />
+                  ) : field.type === "select" ? (
+                    <select
+                      value={overrideForm[field.key] || ""}
+                      onChange={(event) =>
+                        updateOverrideForm(field.key, event.target.value)
+                      }
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    >
+                      <option value="">Not published yet</option>
+                      {field.options?.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={overrideForm[field.key] || ""}
+                      onChange={(event) =>
+                        updateOverrideForm(field.key, event.target.value)
+                      }
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    />
+                  )}
+                </div>
+                ))
+              )}
+
+              {overrideMessage ? (
+                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {overrideMessage}
+                </p>
+              ) : null}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeOverrideEditor}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={savingOverride}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingOverride ? "Saving..." : "Save Changes"}
                 </button>
               </div>
             </div>

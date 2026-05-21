@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateSyllabusDto {
@@ -33,4 +33,15 @@ export class CreateSyllabusDto {
   @IsString()
   @IsOptional()
   resources?: string;
+
+  @ApiPropertyOptional({
+    example: {
+      courseInfo: {
+        deliveryMethod: 'In-Person',
+      },
+    },
+  })
+  @IsObject()
+  @IsOptional()
+  manualOverrides?: Record<string, unknown>;
 }

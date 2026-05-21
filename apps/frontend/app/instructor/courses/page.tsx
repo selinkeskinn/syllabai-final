@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import InstructorLayout from "@/components/InstructorLayout";
 import { courseService } from "@/services/course.service";
-import { Bell, Plus, Settings } from "lucide-react";
+import { Archive, Plus } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import SettingsButton from "@/components/SettingsButton";
 
@@ -56,11 +56,12 @@ const courseVisuals = [
 export default function InstructorCoursesPage() {
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchCourses = async () => {
       try {
-        const data = await courseService.getAllCourses();
+        const data = await courseService.getMyCourses();
         setCourses(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error("Instructor courses fetch error:", error);
@@ -72,6 +73,27 @@ export default function InstructorCoursesPage() {
 
     fetchCourses();
   }, []);
+
+  const handleArchiveCourse = async (course: any) => {
+    const confirmed = window.confirm(
+      `Archive "${course.code} - ${course.title}"? Students will no longer see it in active courses.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setArchivingId(course.id);
+      await courseService.archiveCourse(course.id);
+      setCourses((currentCourses) =>
+        currentCourses.filter((item) => item.id !== course.id)
+      );
+    } catch (error) {
+      console.error("Archive course error:", error);
+      window.alert("Course could not be archived. Please try again.");
+    } finally {
+      setArchivingId(null);
+    }
+  };
 
   return (
     <InstructorLayout>
@@ -115,6 +137,7 @@ export default function InstructorCoursesPage() {
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
               {courses.map((course, index) => {
                 const visual = courseVisuals[index % courseVisuals.length];
+                const isArchiving = archivingId === course.id;
 
                 return (
                   <article
@@ -158,13 +181,22 @@ export default function InstructorCoursesPage() {
                         </div>
                       </div>
 
-                      <div className="flex justify-center border-t border-slate-200 pt-4">
+                      <div className="flex items-center justify-center gap-3 border-t border-slate-200 pt-4">
                         <Link
                           href={`/instructor/courses/${course.id}`}
                           className={`rounded-lg border-2 bg-transparent px-4 py-2 text-sm font-medium transition-colors hover:text-white ${visual.text} ${visual.border} hover:${visual.bg}`}
                         >
                           View Course
                         </Link>
+                        <button
+                          type="button"
+                          onClick={() => handleArchiveCourse(course)}
+                          disabled={isArchiving}
+                          className="inline-flex items-center gap-2 rounded-lg border-2 border-slate-300 bg-transparent px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:border-amber-500 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Archive className="h-4 w-4" />
+                          {isArchiving ? "Archiving..." : "Archive"}
+                        </button>
                       </div>
                     </div>
                   </article>

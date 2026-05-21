@@ -6,6 +6,7 @@ import { CreateSyllabusWeekDto } from './create-syllabus-week.dto';
 import { UpdateSyllabusWeekDto } from './update-syllabus-week.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ResourcesService } from '../resources/resources.service';
+import { Prisma } from '@prisma/client';
 
 type UploadedSyllabusFile = Pick<
   Express.Multer.File,
@@ -71,6 +72,9 @@ export class SyllabiService {
         grading: data.grading,
         policies: data.policies,
         resources: data.resources,
+        manualOverrides: data.manualOverrides as
+          | Prisma.InputJsonValue
+          | undefined,
       },
       include: {
         course: true,
@@ -161,6 +165,7 @@ export class SyllabiService {
       documentMimeType?: string | null;
       documentSizeKb?: number | null;
       documentUploadedAt?: Date | null;
+      manualOverrides?: unknown;
     };
 
     // Create a version snapshot before updating
@@ -173,6 +178,7 @@ export class SyllabiService {
           grading: existingWithStructuredFields.grading,
           policies: existingWithStructuredFields.policies,
           resources: existingWithStructuredFields.resources,
+          manualOverrides: existingWithStructuredFields.manualOverrides,
           documentFileName: existingWithStructuredFields.documentFileName,
           documentStoredFileName:
             existingWithStructuredFields.documentStoredFileName,
@@ -184,9 +190,16 @@ export class SyllabiService {
       },
     });
 
+    const { manualOverrides, ...rest } = dto;
+    const updateData: Prisma.SyllabusUpdateInput = { ...rest };
+
+    if (manualOverrides !== undefined) {
+      updateData.manualOverrides = manualOverrides as Prisma.InputJsonValue;
+    }
+
     const updated = await this.prisma.syllabus.update({
       where: { id },
-      data: dto,
+      data: updateData,
       include: {
         course: true,
         weeks: { orderBy: { weekNo: 'asc' } },

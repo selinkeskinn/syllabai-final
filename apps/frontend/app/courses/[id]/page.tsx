@@ -42,6 +42,11 @@ import {
   Announcement,
   announcementService,
 } from "@/services/announcement.service";
+import {
+  aiService,
+  CourseAiResource,
+  CourseAiSyllabusSummary,
+} from "@/services/ai.service";
 import { courseService } from "@/services/course.service";
 import NotificationBell from "@/components/NotificationBell";
 import SettingsButton from "@/components/SettingsButton";
@@ -77,6 +82,7 @@ type CourseDetail = {
   title: string;
   description?: string | null;
   semester?: string | null;
+  deliveryMethod?: string | null;
   joinKey?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -162,6 +168,22 @@ const resourceIcons: LucideIcon[] = [
   FileText,
   FolderOpen,
 ];
+
+const isValidExternalUrl = (value?: string | null) => {
+  if (!value) return false;
+
+  try {
+    if (value.includes("...")) return false;
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.hostname !== "..." &&
+      !url.hostname.includes("..")
+    );
+  } catch {
+    return false;
+  }
+};
 
 const formatStableDateTime = (value?: string | null) => {
   if (!value) return "Not available";
@@ -285,6 +307,21 @@ const extractPercentValue = (value?: string | null) => {
   return match ? Number(match[1]) : 0;
 };
 
+const getGradingDisplayParts = (value?: string | null) => {
+  const rawValue = value?.trim() || "";
+  const [descriptionPart, scoringPart, weightPart] = rawValue
+    .split("|")
+    .map((part) => part.trim());
+  const detectedPercent = extractPercentValue(rawValue);
+  const description =
+    descriptionPart.replace(/\(?\d+(?:\.\d+)?\s*%\)?/g, "").trim() ||
+    "Assessment component from the syllabus";
+  const scoring = scoringPart || "As described in syllabus";
+  const weight = weightPart || (detectedPercent > 0 ? `${detectedPercent}%` : rawValue);
+
+  return { description, scoring, weight };
+};
+
 const getGradingChartData = (
   rows: Array<{ label: string; value: string }>
 ) => {
@@ -338,6 +375,29 @@ const getApiErrorMessage = (error: unknown, fallback: string) => {
   return fallback;
 };
 
+const renderSyllabusLoading = () => (
+  <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">
+    Loading syllabus...
+  </div>
+);
+
+const noIndexedResourcesMessage =
+  "No indexed resources yet. Upload a syllabus PDF to enable AI answers.";
+
+const hasCompleteCourseWeeks = (weeks: Array<{ weekNo?: number | null }>) =>
+  Array.from({ length: 15 }, (_, index) => index + 1).every((weekNo) =>
+    weeks.some((week) => week.weekNo === weekNo)
+  );
+
+const createFinalExamWeek = (): SyllabusWeek => ({
+  id: "auto-final-week-16",
+  weekNo: 16,
+  place: null,
+  topic: "Final Exam Week",
+  details: "Final exam schedule will be announced by the university.",
+  todo: "Review all chapters and prepare for the final exam.",
+});
+
 export default function CourseDetailPage() {
   const params = useParams();
   const courseId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -349,6 +409,12 @@ export default function CourseDetailPage() {
   const [loadingSyllabus, setLoadingSyllabus] = useState(true);
   const [loadingAnnouncements, setLoadingAnnouncements] = useState(true);
   const [announcementsAvailable, setAnnouncementsAvailable] = useState(true);
+  const [aiResources, setAiResources] = useState<CourseAiResource[]>([]);
+  const [loadingAiResources, setLoadingAiResources] = useState(true);
+  const [aiSummary, setAiSummary] = useState<CourseAiSyllabusSummary | null>(
+    null
+  );
+  const [loadingAiSummary, setLoadingAiSummary] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [expandedAnnouncementId, setExpandedAnnouncementId] = useState<
     string | number | null
@@ -410,6 +476,90 @@ export default function CourseDetailPage() {
     fetchAnnouncements();
   }, [courseId]);
 
+  useEffect(() => {
+    if (!courseId) return;
+
+    const fetchAiResources = async () => {
+      try {
+        const data = await aiService.getCourseResources(courseId);
+        setAiResources(data);
+      } catch (error) {
+        console.error("AI resources fetch error:", error);
+        setAiResources([]);
+      } finally {
+        setLoadingAiResources(false);
+      }
+    };
+
+    fetchAiResources();
+  }, [courseId]);
+
+  useEffect(() => {
+    const currentCourseId = courseId;
+
+    if (
+      !currentCourseId ||
+      !aiResources.some((resource) => resource.status === "PROCESSING")
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const data = await aiService.getCourseResources(currentCourseId);
+        setAiResources(data);
+      } catch {
+        window.clearInterval(intervalId);
+      }
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [aiResources, courseId]);
+
+  const readyResourceKey = aiResources
+    .filter((resource) => resource.status === "READY")
+    .map(
+      (resource) =>
+        `${resource.resourceId}:${resource.updatedAt}:${resource.chunkCount}`
+    )
+    .join("|");
+  const hasProcessingAiResource = aiResources.some(
+    (resource) => resource.status === "PROCESSING"
+  );
+  const isAiSyllabusLoading =
+    loadingAiSummary || (hasProcessingAiResource && !aiSummary);
+
+  useEffect(() => {
+    const currentCourseId = courseId;
+
+    if (!currentCourseId) {
+      setAiSummary(null);
+      return;
+    }
+
+    if (hasProcessingAiResource) return;
+
+    if (!readyResourceKey) {
+      setAiSummary(null);
+      return;
+    }
+
+    const fetchAiSummary = async () => {
+      try {
+        setLoadingAiSummary(true);
+        const data = await aiService.getSyllabusSummary(currentCourseId);
+        setAiSummary(data);
+      } catch (error) {
+        console.error("AI syllabus summary fetch error:", error);
+        setAiSummary(null);
+      } finally {
+        setLoadingAiSummary(false);
+      }
+    };
+
+    fetchAiSummary();
+  }, [courseId, hasProcessingAiResource, readyResourceKey]);
+
   const sortedDeadlines = [...(course?.deadlines ?? [])].sort((a, b) => {
     const first = a.dueDate ? new Date(a.dueDate).getTime() : 0;
     const second = b.dueDate ? new Date(b.dueDate).getTime() : 0;
@@ -417,13 +567,156 @@ export default function CourseDetailPage() {
   });
 
   const resolvedSyllabus = syllabus ?? course?.syllabus ?? null;
-  const syllabusWeeks = resolvedSyllabus?.weeks ?? [];
+  const splitSummaryText = (value?: string | null) =>
+    value
+      ?.split(/\n|(?<=\.)\s+(?=[A-Z])/)
+      .map((line) => line.trim())
+      .filter(Boolean) ?? [];
+  const aiInstructorInfo = aiSummary?.instructorInfo;
+  const aiCourseInfo = aiSummary?.courseInfo;
+  const aiPolicySections = aiSummary?.policySections;
+  const manualOverrides = resolvedSyllabus?.manualOverrides ?? {};
+  const displayedInstructorInfo = {
+    office:
+      manualOverrides.instructorInfo?.office || aiInstructorInfo?.office || "",
+    officeHours:
+      manualOverrides.instructorInfo?.officeHours ||
+      aiInstructorInfo?.officeHours ||
+      "",
+    cvLink:
+      manualOverrides.instructorInfo?.cvLink || aiInstructorInfo?.cvLink || "",
+  };
+  const displayedCourseInfo = {
+    credits: manualOverrides.courseInfo?.credits || aiCourseInfo?.credits || "",
+    classSchedule:
+      manualOverrides.courseInfo?.classSchedule ||
+      aiCourseInfo?.classSchedule ||
+      "",
+    classroom:
+      manualOverrides.courseInfo?.classroom || aiCourseInfo?.classroom || "",
+    deliveryMethod:
+      course?.deliveryMethod ||
+      manualOverrides.courseInfo?.deliveryMethod ||
+      "In-Person",
+    courseType:
+      manualOverrides.courseInfo?.courseType || aiCourseInfo?.courseType || "",
+    prerequisites:
+      manualOverrides.courseInfo?.prerequisites ||
+      aiCourseInfo?.prerequisites ||
+      "",
+    courseObjectives:
+      manualOverrides.courseInfo?.courseObjectives ||
+      aiCourseInfo?.courseObjectives ||
+      "",
+  };
+  const displayedPolicySections = {
+    communication:
+      manualOverrides.policySections?.communication ||
+      aiPolicySections?.communication,
+    aiDigitalTools:
+      manualOverrides.policySections?.aiDigitalTools ||
+      aiPolicySections?.aiDigitalTools,
+    deadlines:
+      manualOverrides.policySections?.deadlines || aiPolicySections?.deadlines,
+    attendance:
+      manualOverrides.policySections?.attendance ||
+      aiPolicySections?.attendance,
+    disabledStudentSupport:
+      manualOverrides.policySections?.disabledStudentSupport ||
+      aiPolicySections?.disabledStudentSupport,
+    communicationEthics:
+      manualOverrides.policySections?.communicationEthics ||
+      aiPolicySections?.communicationEthics,
+    privacyCopyright:
+      manualOverrides.policySections?.privacyCopyright ||
+      aiPolicySections?.privacyCopyright,
+    academicIntegrity:
+      manualOverrides.policySections?.academicIntegrity ||
+      aiPolicySections?.academicIntegrity,
+  };
+  const displayedMoreInfo = {
+    learningOutcomes:
+      manualOverrides.moreInfo?.learningOutcomes ||
+      aiSummary?.moreInfo?.learningOutcomes ||
+      [],
+    contributionToProgram:
+      manualOverrides.moreInfo?.contributionToProgram ||
+      aiSummary?.moreInfo?.contributionToProgram ||
+      "",
+    courseStructure:
+      manualOverrides.moreInfo?.courseStructure ||
+      aiSummary?.moreInfo?.courseStructure ||
+      "",
+    teachingMethods:
+      manualOverrides.moreInfo?.teachingMethods ||
+      aiSummary?.moreInfo?.teachingMethods ||
+      [],
+  };
+  const aiWeeks: SyllabusWeek[] = (aiSummary?.weeklyTopics ?? []).map(
+    (week, index) => ({
+      id: `ai-week-${week.weekNo ?? index + 1}`,
+      weekNo: week.weekNo ?? index + 1,
+      place: week.place,
+      topic: week.topic || "Not published yet",
+      details: week.details,
+      todo: week.todo,
+    })
+  );
+  const savedWeeks = resolvedSyllabus?.weeks ?? [];
+  const shouldShowFinalExamWeek =
+    hasCompleteCourseWeeks(savedWeeks) || hasCompleteCourseWeeks(aiWeeks);
+  const calendarWeekCount = shouldShowFinalExamWeek ? 16 : 15;
+  const syllabusWeeks: SyllabusWeek[] = Array.from(
+    { length: calendarWeekCount },
+    (_, index) => {
+      const weekNo = index + 1;
+      const savedWeek = savedWeeks.find((week) => week.weekNo === weekNo);
+      const aiWeek = aiWeeks.find((week) => week.weekNo === weekNo);
+
+      if (weekNo === 16 && !savedWeek && !aiWeek) {
+        return createFinalExamWeek();
+      }
+
+      return (
+        savedWeek ||
+        aiWeek || {
+          id: `empty-week-${weekNo}`,
+          weekNo,
+          place: null,
+          topic: "Not published yet",
+          details: "",
+          todo: "",
+        }
+      );
+    }
+  );
   const featuredWeeks = syllabusWeeks.slice(0, 3);
-  const syllabusDescription = getSyllabusDescriptionText(resolvedSyllabus);
+  const syllabusDescription =
+    aiSummary?.courseSummary || getSyllabusDescriptionText(resolvedSyllabus);
   const syllabusDocument = getSyllabusDocumentMetadata(resolvedSyllabus);
-  const gradingRows = getLabeledItems(resolvedSyllabus?.grading);
+  const aiGradingRows =
+    aiSummary?.gradingItems.map((item, index) => ({
+      id: `${item.label || "grading"}-${index}`,
+      label: item.label || `Component ${index + 1}`,
+      value: item.description?.includes("|")
+        ? item.description
+        : [item.description, item.value].filter(Boolean).join(" | "),
+    })) ?? [];
+  const savedGradingText = resolvedSyllabus?.grading || "";
+  const savedGradingLooksOverExtracted =
+    /See policy|Grading note|attendance is not going to be graded|relative grading system/i.test(
+      savedGradingText
+    );
+  const manualGradingRows = savedGradingLooksOverExtracted
+    ? []
+    : getLabeledItems(savedGradingText);
+  const gradingRows =
+    manualGradingRows.length > 0 ? manualGradingRows : aiGradingRows;
   const gradingChartData = getGradingChartData(gradingRows);
-  const policySections = getLabeledItems(resolvedSyllabus?.policies);
+  const aiPoliciesText =
+    aiSummary?.policies?.length ? aiSummary.policies.join("\n") : "";
+  const displayedPoliciesText = resolvedSyllabus?.policies || aiPoliciesText;
+  const policySections = getLabeledItems(displayedPoliciesText);
   const policyTopics = [
     {
       id: "communication",
@@ -482,10 +775,70 @@ export default function CourseDetailPage() {
       );
     }) ?? null;
 
+  const policyContentByTopic: Record<string, string | undefined> = {
+      communication: displayedPolicySections.communication,
+      "ai-tools": displayedPolicySections.aiDigitalTools,
+      deadlines: displayedPolicySections.deadlines,
+      attendance: displayedPolicySections.attendance,
+      disability: displayedPolicySections.disabledStudentSupport,
+      ethics: displayedPolicySections.communicationEthics,
+      privacy: displayedPolicySections.privacyCopyright,
+      "academic-integrity": displayedPolicySections.academicIntegrity,
+    };
   const selectedPolicyContent =
-    selectedPolicySection?.value || resolvedSyllabus?.policies || "";
+    policyContentByTopic[activePolicyTopic.id] ||
+      selectedPolicySection?.value ||
+      displayedPoliciesText ||
+      "";
 
-  const resourceItems = getLabeledItems(resolvedSyllabus?.resources);
+  const readyAiResources = aiResources.filter(
+    (resource) => resource.status === "READY"
+  );
+  const aiResourcesText =
+    aiSummary?.resources?.length ? aiSummary.resources.join("\n") : "";
+  const readyResourceNamesText = readyAiResources
+    .map((resource) => `Uploaded PDF: ${resource.resourceName}`)
+    .join("\n");
+  const savedResourcesText = resolvedSyllabus?.resources || "";
+  const savedResourcesLooksOverExtracted =
+    /Course Learning Outcomes|Teaching Methods and Techniques Used in the Course|Course Policies/i.test(
+      savedResourcesText
+    );
+  const displayedResourcesText =
+    savedResourcesLooksOverExtracted && aiResourcesText
+      ? aiResourcesText
+      : savedResourcesText || aiResourcesText || readyResourceNamesText;
+  const resourceItems = getLabeledItems(displayedResourcesText);
+  const resourceFiles = aiResources.length
+    ? aiResources.map((resource) => ({
+        id: resource.resourceId,
+        name: resource.resourceName,
+        type: resource.resourceName.split(".").pop() || "PDF",
+        size: `${Math.max(1, Math.round(resource.sizeBytes / 1024))} KB`,
+        uploadDate: formatStableDateTime(resource.createdAt),
+        status: resource.status,
+        errorMessage: resource.errorMessage,
+      }))
+    : syllabusDocument.hasDocument
+      ? [
+          {
+            id: "syllabus-document",
+            name: syllabusDocument.fileName || "Syllabus document",
+            type: syllabusDocument.fileName?.split(".").pop() || "PDF",
+            size: resolvedSyllabus?.documentSizeKb
+              ? `${resolvedSyllabus.documentSizeKb} KB`
+              : "-",
+            uploadDate: resolvedSyllabus?.documentUploadedAt
+              ? formatStableDateTime(resolvedSyllabus.documentUploadedAt)
+              : "-",
+            status: "READY",
+            errorMessage: null,
+          },
+        ]
+      : [];
+  const failedResourceFiles = resourceFiles.filter(
+    (file) => file.status === "FAILED"
+  );
   const rawInstructorName = course?.instructor?.name?.trim();
   const hasMeaningfulInstructorName =
     Boolean(rawInstructorName) &&
@@ -494,7 +847,10 @@ export default function CourseDetailPage() {
     ? rawInstructorName
     : "Course Instructor";
 
-  const getCalendarPlace = (weekNo: number) => {
+  const getCalendarPlace = (week: SyllabusWeek) => {
+    if (week.place) return week.place;
+
+    const weekNo = week.weekNo;
     return [3, 6, 9, 12].includes(weekNo) ? "Online" : "F2F";
   };
 
@@ -931,6 +1287,9 @@ export default function CourseDetailPage() {
             )}
 
             {activeTab === "instructorInfo" && (
+              isAiSyllabusLoading ? (
+                renderSyllabusLoading()
+              ) : (
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 <div className="p-8">
                   <div className="mb-6 flex items-center justify-between">
@@ -950,7 +1309,7 @@ export default function CourseDetailPage() {
                     <div>
                       <p className="mb-1 text-xs text-slate-500">Office</p>
                       <p className="text-sm text-slate-900">
-                        Not published yet
+                        {displayedInstructorInfo.office || "Not published yet"}
                       </p>
                     </div>
 
@@ -977,25 +1336,39 @@ export default function CourseDetailPage() {
                         Office Hours
                       </p>
                       <p className="text-sm text-slate-900">
-                        Not published yet
+                        {displayedInstructorInfo.officeHours ||
+                          "Not published yet"}
                       </p>
                     </div>
 
                     <div className="col-span-2">
                       <p className="mb-1 text-xs text-slate-500">CV</p>
-                      <a
-                        href="#"
-                        className="text-sm text-blue-600 hover:underline"
-                      >
-                        View Curriculum Vitae
-                      </a>
+                      {isValidExternalUrl(displayedInstructorInfo.cvLink) ? (
+                        <a
+                          href={displayedInstructorInfo.cvLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm text-blue-600 hover:underline"
+                        >
+                          View Curriculum Vitae
+                        </a>
+                      ) : (
+                        <p className="text-sm text-slate-900">
+                          {displayedInstructorInfo.cvLink ||
+                            "Not published yet"}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
+              )
             )}
 
             {activeTab === "courseInfo" && (
+              isAiSyllabusLoading ? (
+                renderSyllabusLoading()
+              ) : (
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-200 p-8">
                   <div className="mb-6 flex items-center justify-between">
@@ -1010,21 +1383,22 @@ export default function CourseDetailPage() {
                         Class Schedule
                       </p>
                       <p className="text-sm text-slate-900">
-                        Not published yet
+                        {displayedCourseInfo.classSchedule ||
+                          "Not published yet"}
                       </p>
                     </div>
 
                     <div>
                       <p className="mb-1 text-xs text-slate-500">Credits</p>
                       <p className="text-sm text-slate-900">
-                        Not published yet
+                        {displayedCourseInfo.credits || "Not published yet"}
                       </p>
                     </div>
 
                     <div>
                       <p className="mb-1 text-xs text-slate-500">Classroom</p>
                       <p className="text-sm text-slate-900">
-                        Not published yet
+                        {displayedCourseInfo.classroom || "Not published yet"}
                       </p>
                     </div>
 
@@ -1033,7 +1407,8 @@ export default function CourseDetailPage() {
                         Delivery Method
                       </p>
                       <p className="text-sm text-slate-900">
-                        Face-to-Face / Hybrid
+                        {displayedCourseInfo.deliveryMethod ||
+                          "Not published yet"}
                       </p>
                     </div>
 
@@ -1042,7 +1417,7 @@ export default function CourseDetailPage() {
                         Course Type
                       </p>
                       <p className="text-sm text-slate-900">
-                        {course.semester || "Spring 2026 Semester"}
+                        {displayedCourseInfo.courseType || "Not published yet"}
                       </p>
                     </div>
                   </div>
@@ -1056,11 +1431,14 @@ export default function CourseDetailPage() {
                   </div>
 
                   <div className="space-y-3">
-                    {[
-                      "Enrollment in the course workspace",
-                      "Review of the official syllabus and weekly plan",
-                      "Completion of required project milestones announced by the instructor",
-                    ].map((item) => (
+                    {(splitSummaryText(displayedCourseInfo.prerequisites).length
+                      ? splitSummaryText(displayedCourseInfo.prerequisites)
+                      : [
+                          "Enrollment in the course workspace",
+                          "Review of the official syllabus and weekly plan",
+                          "Completion of required project milestones announced by the instructor",
+                        ]
+                    ).map((item) => (
                       <div key={item} className="flex items-start gap-3">
                         <div className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400" />
                         <p className="text-sm text-slate-900">{item}</p>
@@ -1077,16 +1455,10 @@ export default function CourseDetailPage() {
                   </div>
 
                   <div className="space-y-3">
-                    {(syllabusDescription
-                      ? syllabusDescription
-                          .split("\n")
-                          .map((item) => item.trim())
-                          .filter(Boolean)
+                    {(splitSummaryText(displayedCourseInfo.courseObjectives).length
+                      ? splitSummaryText(displayedCourseInfo.courseObjectives)
                       : [
-                          course.description ||
-                            "Understand the course expectations, assessment structure, and weekly learning plan.",
-                          "Follow syllabus-backed resources, policies, grading details, and deadlines.",
-                          "Use the course workspace to track updates, announcements, and deliverables.",
+                          "Course objectives are defined by the instructor and official syllabus.",
                         ]
                     ).map((item, index) => (
                       <div key={`${item}-${index}`} className="flex items-start gap-3">
@@ -1186,6 +1558,7 @@ export default function CourseDetailPage() {
                   </div>
                 </div>
               </div>
+              )
             )}
 
             {activeTab === "courseCalendar" && (
@@ -1201,14 +1574,14 @@ export default function CourseDetailPage() {
                   </div>
                 </div>
 
-                {loadingSyllabus ? (
+                {loadingSyllabus || isAiSyllabusLoading ? (
                   <div className="p-8 text-sm text-slate-500">
-                    Loading syllabus calendar...
+                    Loading syllabus...
                   </div>
-                ) : !resolvedSyllabus || syllabusWeeks.length === 0 ? (
+                ) : syllabusWeeks.length === 0 ? (
                   <div className="p-8">
                     <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-                      No weekly course calendar has been published yet.
+                      No weekly course calendar has been found in the uploaded PDFs yet.
                     </div>
                   </div>
                 ) : (
@@ -1236,7 +1609,7 @@ export default function CourseDetailPage() {
                           {[...syllabusWeeks]
                             .sort((a, b) => a.weekNo - b.weekNo)
                             .map((week) => {
-                              const place = getCalendarPlace(week.weekNo);
+                              const place = getCalendarPlace(week);
                               const assessment = getCalendarAssessment(week);
 
                               return (
@@ -1364,6 +1737,13 @@ export default function CourseDetailPage() {
                     </div>
                   </div>
 
+                  {failedResourceFiles.length > 0 ? (
+                    <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                      {failedResourceFiles[0]?.errorMessage ||
+                        "PDF indexing failed. Please ask the instructor to upload a text-based PDF again."}
+                    </div>
+                  ) : null}
+
                   <div className="overflow-hidden rounded-xl border border-slate-200">
                     <table className="w-full border-collapse text-left">
                       <thead className="bg-slate-50">
@@ -1388,51 +1768,56 @@ export default function CourseDetailPage() {
                       </thead>
 
                       <tbody className="bg-white">
-                        {syllabusDocument.hasDocument ? (
+                        {loadingAiResources ? (
                           <tr className="border-t border-slate-200">
-                            <td className="px-5 py-5">
-                              <input
-                                type="checkbox"
-                                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                aria-label="Select syllabus file"
-                              />
-                            </td>
-
-                            <td className="px-5 py-5">
-                              <div className="flex items-center gap-4">
-                                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-red-100 text-red-600">
-                                  <FileText className="h-6 w-6" />
-                                </div>
-
-                                <div className="min-w-0">
-                                  <p className="break-words text-sm font-semibold text-slate-900">
-                                    {syllabusDocument.fileName}
-                                  </p>
-                                  <p className="mt-1 text-xs font-medium uppercase text-slate-500">
-                                    {syllabusDocument.fileName?.split(".").pop() || "PDF"}
-                                  </p>
-                                </div>
-                              </div>
-                            </td>
-
-                            <td className="px-5 py-5 text-sm text-slate-600">
-                              {resolvedSyllabus?.documentSizeKb
-                                ? `${resolvedSyllabus.documentSizeKb} KB`
-                                : "—"}
-                            </td>
-
-                            <td className="px-5 py-5 text-sm text-slate-600">
-                              {resolvedSyllabus?.documentUploadedAt
-                                ? formatStableDateTime(
-                                    resolvedSyllabus.documentUploadedAt
-                                  )
-                                : "—"}
+                            <td colSpan={4} className="px-5 py-8 text-sm text-slate-500">
+                              Loading course documents...
                             </td>
                           </tr>
+                        ) : resourceFiles.length > 0 ? (
+                          resourceFiles.map((file) => (
+                            <tr key={file.id} className="border-t border-slate-200">
+                              <td className="px-5 py-5">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                  aria-label={`Select ${file.name}`}
+                                />
+                              </td>
+
+                              <td className="px-5 py-5">
+                                <div className="flex items-center gap-4">
+                                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-red-100 text-red-600">
+                                    <FileText className="h-6 w-6" />
+                                  </div>
+
+                                  <div className="min-w-0">
+                                    <p className="break-words text-sm font-semibold text-slate-900">
+                                      {file.name}
+                                    </p>
+                                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs font-medium uppercase text-slate-500">
+                                      <span>{file.type}</span>
+                                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                        {file.status}
+                                      </span>
+                                    </p>
+                                  </div>
+                                </div>
+                              </td>
+
+                              <td className="px-5 py-5 text-sm text-slate-600">
+                                {file.size}
+                              </td>
+
+                              <td className="px-5 py-5 text-sm text-slate-600">
+                                {file.uploadDate}
+                              </td>
+                            </tr>
+                          ))
                         ) : (
                           <tr className="border-t border-slate-200">
                             <td colSpan={4} className="px-5 py-8 text-sm text-slate-500">
-                              No uploaded syllabus file is available yet.
+                              {noIndexedResourcesMessage}
                             </td>
                           </tr>
                         )}
@@ -1441,7 +1826,8 @@ export default function CourseDetailPage() {
                   </div>
 
                   <p className="mt-4 text-sm text-slate-500">
-                    Showing {syllabusDocument.hasDocument ? "1 file" : "0 files"}
+                    Showing {resourceFiles.length} file
+                    {resourceFiles.length === 1 ? "" : "s"}
                   </p>
                 </section>
 
@@ -1450,9 +1836,13 @@ export default function CourseDetailPage() {
                     Course Resources
                   </h3>
 
-                  {resolvedSyllabus?.resources ? (
+                  {isAiSyllabusLoading ? (
+                    <p className="mt-5 text-sm text-slate-500">
+                      Loading syllabus...
+                    </p>
+                  ) : displayedResourcesText ? (
                     <div className="mt-6 space-y-4 text-sm leading-7 text-slate-600">
-                      {resolvedSyllabus.resources
+                      {displayedResourcesText
                         .split("\n")
                         .map((line, index) => {
                           const trimmedLine = line.trim();
@@ -1501,7 +1891,7 @@ export default function CourseDetailPage() {
                     </div>
                   ) : (
                     <div className="mt-5 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-                      No syllabus-backed resources are available yet.
+                      {noIndexedResourcesMessage}
                     </div>
                   )}
                 </section>
@@ -1509,6 +1899,9 @@ export default function CourseDetailPage() {
             )}
 
             {activeTab === "grading" && (
+              isAiSyllabusLoading ? (
+                renderSyllabusLoading()
+              ) : (
               <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
                 <div className="border-b border-slate-200 px-8 py-6">
                   <h3 className="text-lg font-semibold text-slate-900">
@@ -1576,7 +1969,10 @@ export default function CourseDetailPage() {
 
                         <tbody>
                           {gradingRows.map((row) => {
-                            const percent = extractPercentValue(row.value);
+                            const parts = getGradingDisplayParts(row.value);
+                            const percent = extractPercentValue(
+                              parts.weight || row.value
+                            );
 
                             return (
                               <tr
@@ -1587,14 +1983,13 @@ export default function CourseDetailPage() {
                                   {row.label}
                                 </td>
                                 <td className="px-8 py-5 text-sm text-slate-600">
-                                  {row.value.replace(/\(?\d+(?:\.\d+)?\s*%\)?/g, "").trim() ||
-                                    "Assessment component from the syllabus"}
+                                  {parts.description}
                                 </td>
                                 <td className="px-8 py-5 text-sm text-slate-600">
-                                  As described in syllabus
+                                  {parts.scoring}
                                 </td>
                                 <td className="px-8 py-5 text-right text-sm font-semibold text-slate-900">
-                                  {percent > 0 ? `${percent}%` : row.value}
+                                  {percent > 0 ? `${percent}%` : parts.weight}
                                 </td>
                               </tr>
                             );
@@ -1617,7 +2012,9 @@ export default function CourseDetailPage() {
                 ) : (
                   <div className="p-8">
                     <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-                      No syllabus-backed grading information is available yet.
+                      {readyAiResources.length === 0
+                        ? noIndexedResourcesMessage
+                        : "No syllabus-backed grading information is available yet."}
                     </div>
                   </div>
                 )}
@@ -1661,9 +2058,13 @@ export default function CourseDetailPage() {
                   </div>
                 </div>
               </div>
+              )
             )}
 
             {activeTab === "policies" && (
+              isAiSyllabusLoading ? (
+                renderSyllabusLoading()
+              ) : (
               <div
                 className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
                 style={{ minHeight: "600px" }}
@@ -1740,47 +2141,12 @@ export default function CourseDetailPage() {
                             );
                           })}
 
-                        {activePolicyTab === "communication" ? (
-                          <div className="mt-6 border-l-4 border-blue-500 bg-blue-50 p-4">
-                            <p className="text-sm text-blue-900">
-                              <strong>Note:</strong> Please use official university
-                              communication channels for course-related questions.
-                            </p>
-                          </div>
-                        ) : null}
-
-                        {activePolicyTab === "deadlines" ? (
-                          <div className="mt-6 border-l-4 border-blue-500 bg-blue-50 p-4">
-                            <p className="text-sm text-blue-900">
-                              <strong>Tip:</strong> Plan ahead and start assignments
-                              early to avoid technical issues close to the deadline.
-                            </p>
-                          </div>
-                        ) : null}
-
-                        {activePolicyTab === "attendance" ||
-                        activePolicyTab === "academic-integrity" ? (
-                          <div className="mt-6 border-l-4 border-red-500 bg-red-50 p-4">
-                            <p className="text-sm text-red-900">
-                              <strong>Warning:</strong> Policy violations may affect
-                              course standing and should be discussed with the
-                              instructor as early as possible.
-                            </p>
-                          </div>
-                        ) : null}
-
-                        {activePolicyTab === "ai-tools" ? (
-                          <div className="mt-6 border-l-4 border-amber-500 bg-amber-50 p-4">
-                            <p className="text-sm text-amber-900">
-                              <strong>Important:</strong> AI usage should follow the
-                              course policy and must be disclosed when required.
-                            </p>
-                          </div>
-                        ) : null}
                       </div>
                     ) : (
                       <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-                        No syllabus-backed policy information is available yet.
+                        {readyAiResources.length === 0
+                          ? noIndexedResourcesMessage
+                          : "No syllabus-backed policy information is available yet."}
                       </div>
                     )}
                   </div>
@@ -1834,9 +2200,13 @@ export default function CourseDetailPage() {
                   </aside>
                 </div>
               </div>
+              )
             )}
 
             {activeTab === "moreInfo" && (
+              isAiSyllabusLoading ? (
+                renderSyllabusLoading()
+              ) : (
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-200 p-8">
                   <div className="mb-6 flex items-center justify-between">
@@ -1845,26 +2215,19 @@ export default function CourseDetailPage() {
                     </h3>
                   </div>
 
-                  <p className="mb-4 text-slate-700">
-                    At the end of the course, you will be able to:
+                  <p className="leading-relaxed text-slate-700">
+                    {(displayedMoreInfo.learningOutcomes.length
+                      ? displayedMoreInfo.learningOutcomes
+                      : syllabusDescription
+                        ? splitSummaryText(syllabusDescription)
+                        : [
+                            "Describe the course expectations and learning goals.",
+                            "Follow the weekly syllabus plan and course deliverables.",
+                            "Use announcements, resources, grading details, and deadlines effectively.",
+                            "Apply course knowledge to assignments, projects, and assessments.",
+                          ]
+                    ).join(" ")}
                   </p>
-
-                  <ol className="list-inside list-decimal space-y-2.5 text-slate-700">
-                    {(syllabusDescription
-                      ? syllabusDescription
-                          .split("\n")
-                          .map((item) => item.trim())
-                          .filter(Boolean)
-                      : [
-                          "Describe the course expectations and learning goals.",
-                          "Follow the weekly syllabus plan and course deliverables.",
-                          "Use announcements, resources, grading details, and deadlines effectively.",
-                          "Apply course knowledge to assignments, projects, and assessments.",
-                        ]
-                    ).map((item, index) => (
-                      <li key={`${item}-${index}`}>{item}</li>
-                    ))}
-                  </ol>
                 </div>
 
                 <div className="border-b border-slate-200 p-8">
@@ -1875,7 +2238,8 @@ export default function CourseDetailPage() {
                   </div>
 
                   <p className="text-slate-700">
-                    {course.description ||
+                    {displayedMoreInfo.contributionToProgram ||
+                      course.description ||
                       "This course contributes to the program by helping students understand course expectations, manage syllabus-backed tasks, follow deadlines, and engage with structured academic resources throughout the semester."}
                   </p>
                 </div>
@@ -1888,21 +2252,24 @@ export default function CourseDetailPage() {
                   </div>
 
                   <p className="mb-6 text-slate-700">
-                    This course uses a variety of teaching and learning methods to
-                    support understanding, participation, and practical application.
+                    {displayedMoreInfo.courseStructure ||
+                      "This course uses a variety of teaching and learning methods to support understanding, participation, and practical application."}
                   </p>
 
                   <div className="grid grid-cols-2 gap-x-8 gap-y-3 md:grid-cols-4">
-                    {[
-                      "Collaborative Learning",
-                      "Discussion",
-                      "Guest Speaker",
-                      "Lecture",
-                      "Observation",
-                      "Problem Solving",
-                      "Reading",
-                      "Technology-Enhanced Learning",
-                    ].map((method) => (
+                    {(displayedMoreInfo.teachingMethods.length
+                      ? displayedMoreInfo.teachingMethods
+                      : [
+                          "Collaborative Learning",
+                          "Discussion",
+                          "Guest Speaker",
+                          "Lecture",
+                          "Observation",
+                          "Problem Solving",
+                          "Reading",
+                          "Technology-Enhanced Learning",
+                        ]
+                    ).map((method) => (
                       <div key={method} className="flex items-start gap-3">
                         <div className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400" />
                         <span className="text-sm text-slate-700">{method}</span>
@@ -1911,6 +2278,7 @@ export default function CourseDetailPage() {
                   </div>
                 </div>
               </div>
+              )
             )}
 
 

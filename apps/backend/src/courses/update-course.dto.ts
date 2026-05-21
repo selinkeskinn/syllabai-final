@@ -16,4 +16,9 @@ export class UpdateCourseDto {
   @IsString()
   @IsOptional()
   semester?: string;
+
+  @ApiPropertyOptional({ example: 'In-Person' })
+  @IsString()
+  @IsOptional()
+  deliveryMethod?: string;
 }

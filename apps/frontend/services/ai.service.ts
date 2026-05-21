@@ -31,6 +31,35 @@ export type CourseAiAskResponse = {
 
 export type CourseAiSyllabusSummary = {
   courseSummary: string;
+  instructorInfo: {
+    office: string;
+    officeHours: string;
+    cvLink: string;
+  };
+  courseInfo: {
+    credits: string;
+    classSchedule: string;
+    classroom: string;
+    courseType: string;
+    prerequisites: string;
+    courseObjectives: string;
+  };
+  policySections: {
+    communication: string;
+    aiDigitalTools: string;
+    deadlines: string;
+    attendance: string;
+    disabledStudentSupport: string;
+    communicationEthics: string;
+    privacyCopyright: string;
+    academicIntegrity: string;
+  };
+  moreInfo: {
+    learningOutcomes: string[];
+    contributionToProgram: string;
+    courseStructure: string;
+    teachingMethods: string[];
+  };
   gradingItems: Array<{
     label: string;
     value: string;
@@ -40,6 +69,7 @@ export type CourseAiSyllabusSummary = {
   resources: string[];
   weeklyTopics: Array<{
     weekNo: number | null;
+    place?: string;
     topic: string;
     details: string;
     todo: string;
