@@ -62,7 +62,6 @@ export default function FeedbackPage() {
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [ratings, setRatings] = useState<Record<string, number>>({});
   const [selectedTags, setSelectedTags] = useState<Record<string, string[]>>({});
-  const [comments, setComments] = useState<Record<string, string>>({});
   const [anonymous, setAnonymous] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [submittingCourseId, setSubmittingCourseId] = useState<string | null>(
@@ -117,13 +116,6 @@ export default function FeedbackPage() {
     }));
   };
 
-  const setComment = (courseId: string, value: string) => {
-    setComments((prev) => ({
-      ...prev,
-      [courseId]: value,
-    }));
-  };
-
   const handleSubmit = async (course: CourseSummary) => {
     const rating = ratings[course.id] || 0;
 
@@ -140,14 +132,12 @@ export default function FeedbackPage() {
         courseId: course.id,
         rating,
         tags: selectedTags[course.id] || [],
-        comment: comments[course.id]?.trim() || undefined,
         isAnonymous: Boolean(anonymous[course.id]),
       });
 
       setMessage(`Course evaluation submitted for ${course.code}.`);
       setRatings((prev) => ({ ...prev, [course.id]: 0 }));
       setSelectedTags((prev) => ({ ...prev, [course.id]: [] }));
-      setComments((prev) => ({ ...prev, [course.id]: "" }));
       setAnonymous((prev) => ({ ...prev, [course.id]: false }));
     } catch (error) {
       console.error("Feedback submit error:", error);
@@ -312,19 +302,6 @@ export default function FeedbackPage() {
                           );
                         })}
                       </div>
-                    </div>
-
-                    <div className="mt-6">
-                      <label className="mb-2 block text-sm font-medium text-slate-700">
-                        Additional Comment Optional
-                      </label>
-                      <textarea
-                        value={comments[course.id] || ""}
-                        onChange={(e) => setComment(course.id, e.target.value)}
-                        rows={4}
-                        placeholder="Share additional thoughts about this course..."
-                        className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                      />
                     </div>
 
                     <div className="mt-6 flex justify-end">

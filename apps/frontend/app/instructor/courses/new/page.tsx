@@ -32,7 +32,6 @@ export default function NewCoursePage() {
   const [formData, setFormData] = useState({
     code: "",
     title: "",
-    description: "",
     semester: "",
     deliveryMethod: "In-Person",
   });
@@ -193,25 +192,6 @@ export default function NewCoursePage() {
                   <option value="Online">Online</option>
                   <option value="Hybrid">Hybrid</option>
                 </select>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="course-description"
-                  className="mb-2 block text-sm font-medium text-slate-700"
-                >
-                  Description
-                </label>
-                <textarea
-                  id="course-description"
-                  name="description"
-                  required
-                  rows={4}
-                  value={formData.description}
-                  onChange={handleChange}
-                  className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  placeholder="Enter course description"
-                />
               </div>
 
               <div>

@@ -189,7 +189,11 @@ export default function DashboardPage() {
 
   const actionableDeadlines = useMemo(() => {
     return [...deadlines]
-      .filter((deadline) => deadline.type === "ASSIGNMENT" || deadline.type === "PROJECT")
+      .filter((deadline) =>
+        ["ASSIGNMENT", "PROJECT", "QUIZ", "EXAM"].includes(
+          String(deadline.type || "").toUpperCase()
+        )
+      )
       .sort((a, b) => {
         const first = a.dueDate ? new Date(a.dueDate).getTime() : 0;
         const second = b.dueDate ? new Date(b.dueDate).getTime() : 0;
@@ -240,7 +244,7 @@ export default function DashboardPage() {
                   </h2>
                 </div>
                 <p className="mt-5 text-xs text-slate-500">
-                  Only showing actionable items assignments, projects
+                  Showing calendar events, assignments, projects, quizzes, and exams
                 </p>
               </div>
 

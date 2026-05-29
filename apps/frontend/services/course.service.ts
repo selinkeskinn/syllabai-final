@@ -81,7 +81,7 @@ export const courseService = {
   async createCourse(data: {
     code: string;
     title: string;
-    description: string;
+    description?: string;
     semester: string;
     deliveryMethod?: string;
     file?: File | null;
@@ -90,7 +90,9 @@ export const courseService = {
       const formData = new FormData();
       formData.append("code", data.code);
       formData.append("title", data.title);
-      formData.append("description", data.description);
+      if (data.description) {
+        formData.append("description", data.description);
+      }
       formData.append("semester", data.semester);
       formData.append("deliveryMethod", data.deliveryMethod || "In-Person");
       formData.append("file", data.file);
@@ -107,7 +109,7 @@ export const courseService = {
     const response = await api.post("/courses", {
       code: data.code,
       title: data.title,
-      description: data.description,
+      ...(data.description ? { description: data.description } : {}),
       semester: data.semester,
       deliveryMethod: data.deliveryMethod || "In-Person",
     });

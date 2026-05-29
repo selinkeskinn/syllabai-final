@@ -10,8 +10,8 @@ export class CreateCourseDto {
   title: string;
 
   @IsString()
-  @IsNotEmpty()
-  description: string;
+  @IsOptional()
+  description?: string;
 
   @IsString()
   @IsNotEmpty()

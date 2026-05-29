@@ -28,7 +28,7 @@ export class DeadlinesService {
       whereClause.courseId = courseId;
     }
 
-    return this.prisma.deadline.findMany({
+    const deadlines = await this.prisma.deadline.findMany({
       where: whereClause,
       include: {
         course: {
@@ -37,6 +37,11 @@ export class DeadlinesService {
       },
       orderBy: { dueDate: 'asc' },
     });
+    const calendarDeadlines = await this.findCalendarDeadlines({
+      courseId: whereClause.courseId,
+    });
+
+    return this.sortDeadlines([...deadlines, ...calendarDeadlines]);
   }
 
   /** Get all deadlines for an instructor's courses */
@@ -49,7 +54,7 @@ export class DeadlinesService {
       whereClause.courseId = courseId;
     }
 
-    return this.prisma.deadline.findMany({
+    const deadlines = await this.prisma.deadline.findMany({
       where: whereClause,
       include: {
         course: {
@@ -58,6 +63,12 @@ export class DeadlinesService {
       },
       orderBy: { dueDate: 'asc' },
     });
+    const calendarDeadlines = await this.findCalendarDeadlines({
+      instructorId: userId,
+      ...(courseId ? { courseId } : {}),
+    });
+
+    return this.sortDeadlines([...deadlines, ...calendarDeadlines]);
   }
 
   async findById(id: string) {
@@ -135,5 +146,133 @@ export class DeadlinesService {
         'You can only manage deadlines for your own courses',
       );
     }
+  }
+
+  private async findCalendarDeadlines(where: any) {
+    const courses = await this.prisma.course.findMany({
+      where: {
+        archivedAt: null,
+        ...where,
+      },
+      include: {
+        syllabus: {
+          include: {
+            weeks: { orderBy: { weekNo: 'asc' } },
+          },
+        },
+      },
+    });
+
+    return courses.flatMap((course) =>
+      this.buildCalendarDeadlines(
+        course.id,
+        { id: course.id, code: course.code, title: course.title },
+        course.syllabus?.weeks ?? [],
+      ),
+    );
+  }
+
+  private buildCalendarDeadlines(
+    courseId: string,
+    course: { id: string; code: string; title: string },
+    weeks: Array<{
+      weekNo: number;
+      topic?: string | null;
+      details?: string | null;
+      todo?: string | null;
+    }>,
+  ) {
+    return weeks
+      .map((week) => this.buildCalendarDeadline(courseId, course, week))
+      .filter((deadline): deadline is NonNullable<typeof deadline> =>
+        Boolean(deadline),
+      );
+  }
+
+  private buildCalendarDeadline(
+    courseId: string,
+    course: { id: string; code: string; title: string },
+    week: {
+      weekNo: number;
+      topic?: string | null;
+      details?: string | null;
+      todo?: string | null;
+    },
+  ) {
+    const text = [week.topic, week.details, week.todo]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const event = this.detectCalendarEvent(text);
+
+    if (!event) {
+      return null;
+    }
+
+    return {
+      id: `calendar-${courseId}-week-${week.weekNo}-${event.type.toLowerCase()}`,
+      courseId,
+      title: event.title,
+      description: `Automatically generated from Course Calendar week ${week.weekNo}.`,
+      dueDate: this.getAcademicWeekDate(week.weekNo, event.type).toISOString(),
+      type: event.type,
+      createdAt: this.getAcademicWeekDate(week.weekNo, event.type),
+      updatedAt: this.getAcademicWeekDate(week.weekNo, event.type),
+      course,
+      isCalendarGenerated: true,
+      weekNo: week.weekNo,
+    };
+  }
+
+  private detectCalendarEvent(text: string) {
+    const normalized = text.toLowerCase();
+
+    if (/\bfinal\b/.test(normalized)) {
+      return { title: 'Final Exam Week', type: 'EXAM' as const };
+    }
+
+    if (/\bmidterm\b/.test(normalized)) {
+      return { title: 'Midterm Exam Week', type: 'EXAM' as const };
+    }
+
+    if (/\bquiz\b/.test(normalized)) {
+      return { title: 'Quiz', type: 'QUIZ' as const };
+    }
+
+    if (/\bproject\s+upload\b/.test(normalized) || /\bupload\s*#?\s*\d*/.test(normalized)) {
+      return { title: 'Project Upload', type: 'PROJECT' as const };
+    }
+
+    return null;
+  }
+
+  private getAcademicWeekDate(weekNo: number, type: string) {
+    const currentAcademicWeek = 8;
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    const day = base.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    base.setDate(base.getDate() + mondayOffset);
+    base.setDate(base.getDate() + (weekNo - currentAcademicWeek) * 7 + 4);
+
+    if (type === 'EXAM') {
+      base.setHours(9, 0, 0, 0);
+    } else {
+      base.setHours(23, 59, 0, 0);
+    }
+
+    return base;
+  }
+
+  private sortDeadlines<T extends { dueDate?: Date | string | null }>(
+    deadlines: T[],
+  ) {
+    return deadlines.sort((first, second) => {
+      const firstTime = first.dueDate ? new Date(first.dueDate).getTime() : 0;
+      const secondTime = second.dueDate ? new Date(second.dueDate).getTime() : 0;
+
+      return firstTime - secondTime;
+    });
   }
 }

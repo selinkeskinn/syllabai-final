@@ -307,17 +307,63 @@ const extractPercentValue = (value?: string | null) => {
   return match ? Number(match[1]) : 0;
 };
 
+const cleanGradingDescription = (value: string) =>
+  value
+    .replace(/(?:\b[A-Za-z]\b\s*){8,}/g, " ")
+    .replace(/\s+([.,;:])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const getGradingDisplayParts = (value?: string | null) => {
   const rawValue = value?.trim() || "";
   const [descriptionPart, scoringPart, weightPart] = rawValue
     .split("|")
     .map((part) => part.trim());
   const detectedPercent = extractPercentValue(rawValue);
+  const splitDigitWeight = weightPart?.match(/^(\d)\s*%$/);
+  const numericScoring = scoringPart?.match(/^(\d+(?:\.\d+)?)$/);
+  const likelyDroppedWeightZero =
+    splitDigitWeight &&
+    numericScoring &&
+    numericScoring[1].endsWith("0") &&
+    numericScoring[1].startsWith(splitDigitWeight[1]) &&
+    Number(numericScoring[1]) >= 10 &&
+    Number(numericScoring[1]) <= 100 &&
+    !/^\d+(?:\.\d+)?\s*%?$/.test(descriptionPart);
+  const likelyPdfPageNumberAsWeight =
+    splitDigitWeight &&
+    numericScoring &&
+    Number(splitDigitWeight[1]) <= 5 &&
+    Number(numericScoring[1]) >= 10 &&
+    Number(numericScoring[1]) < 100 &&
+    !/^\d+(?:\.\d+)?\s*%?$/.test(descriptionPart);
+  const trailingScoring = descriptionPart.match(/\b(100)\s*$/);
+  const normalizedDescriptionPart = likelyPdfPageNumberAsWeight
+    ? descriptionPart.replace(/\b100\s*$/, "").trim()
+    : descriptionPart;
+  const cleanedDescription = cleanGradingDescription(normalizedDescriptionPart);
   const description =
-    descriptionPart.replace(/\(?\d+(?:\.\d+)?\s*%\)?/g, "").trim() ||
-    "Assessment component from the syllabus";
-  const scoring = scoringPart || "As described in syllabus";
-  const weight = weightPart || (detectedPercent > 0 ? `${detectedPercent}%` : rawValue);
+    cleanedDescription && !/^\d+(?:\.\d+)?\s*%?$/.test(cleanedDescription)
+      ? cleanedDescription
+      : "Assessment component from the syllabus";
+  const scoring =
+    likelyDroppedWeightZero
+      ? "100"
+      : likelyPdfPageNumberAsWeight
+      ? trailingScoring?.[1] || "100"
+      : splitDigitWeight &&
+          /^\d$/.test(scoringPart) &&
+          /^\d+(?:\.\d+)?$/.test(descriptionPart)
+      ? descriptionPart
+      : scoringPart || "As described in syllabus";
+  const weight =
+    likelyDroppedWeightZero
+      ? `${numericScoring[1]}%`
+      : likelyPdfPageNumberAsWeight
+      ? `${numericScoring[1]}%`
+      : splitDigitWeight && /^\d$/.test(scoringPart)
+      ? `${scoringPart}${splitDigitWeight[1]}%`
+      : weightPart || (detectedPercent > 0 ? `${detectedPercent}%` : rawValue);
 
   return { description, scoring, weight };
 };
@@ -326,11 +372,15 @@ const getGradingChartData = (
   rows: Array<{ label: string; value: string }>
 ) => {
   const rowsWithPercent = rows
-    .map((row, index) => ({
-      name: row.label,
-      value: extractPercentValue(row.value),
-      color: gradingColors[index % gradingColors.length],
-    }))
+    .map((row, index) => {
+      const { weight } = getGradingDisplayParts(row.value);
+
+      return {
+        name: row.label,
+        value: extractPercentValue(weight),
+        color: gradingColors[index % gradingColors.length],
+      };
+    })
     .filter((item) => item.value > 0);
 
   if (rowsWithPercent.length > 0) return rowsWithPercent;
@@ -340,6 +390,65 @@ const getGradingChartData = (
     value: Math.round(100 / Math.max(rows.length, 1)),
     color: gradingColors[index % gradingColors.length],
   }));
+};
+
+const getGradingWeightTotal = (rows: Array<{ label: string; value: string }>) =>
+  rows.reduce((sum, row) => {
+    const { weight } = getGradingDisplayParts(row.value);
+
+    return sum + extractPercentValue(weight);
+  }, 0);
+
+const repairFinalExamWeight = <T extends { label: string; value: string }>(
+  rows: T[]
+) => {
+  const weights = rows.map((row) => ({
+    row,
+    weight: extractPercentValue(getGradingDisplayParts(row.value).weight),
+  }));
+  const total = weights.reduce((sum, item) => sum + item.weight, 0);
+
+  if (total >= 95 || total === 0) return rows;
+
+  const finalItem = weights.find(
+    (item) => /final/i.test(item.row.label) && item.weight > 0 && item.weight <= 5
+  );
+
+  if (!finalItem) return rows;
+
+  const otherTotal = weights
+    .filter((item) => item !== finalItem)
+    .reduce((sum, item) => sum + item.weight, 0);
+  const inferredFinalWeight = 100 - otherTotal;
+
+  if (inferredFinalWeight <= 5 || inferredFinalWeight > 100) return rows;
+
+  return rows.map((row) =>
+    row === finalItem.row
+      ? {
+          ...row,
+          value: row.value.includes("|")
+            ? row.value.replace(/\|\s*\d+(?:\.\d+)?\s*%?\s*$/, `| ${inferredFinalWeight}%`)
+            : `Assessment component from the syllabus | 100 | ${inferredFinalWeight}%`,
+        }
+      : row
+  );
+};
+
+const hasUsefulWeekContent = (week?: {
+  topic?: string | null;
+  details?: string | null;
+  todo?: string | null;
+}) => {
+  if (!week) return false;
+
+  const values = [week.topic, week.details, week.todo]
+    .map((value) => value?.trim() || "")
+    .filter(Boolean);
+
+  return values.some(
+    (value) => !/^not published yet$/i.test(value) && value !== "-"
+  );
 };
 
 const getDeadlineTone = (dueDate?: string | null) => {
@@ -678,7 +787,7 @@ export default function CourseDetailPage() {
       }
 
       return (
-        savedWeek ||
+        (hasUsefulWeekContent(savedWeek) ? savedWeek : null) ||
         aiWeek || {
           id: `empty-week-${weekNo}`,
           weekNo,
@@ -710,8 +819,20 @@ export default function CourseDetailPage() {
   const manualGradingRows = savedGradingLooksOverExtracted
     ? []
     : getLabeledItems(savedGradingText);
-  const gradingRows =
-    manualGradingRows.length > 0 ? manualGradingRows : aiGradingRows;
+  const manualGradingTotal = getGradingWeightTotal(manualGradingRows);
+  const aiGradingTotal = getGradingWeightTotal(aiGradingRows);
+  const shouldUseAiGrading =
+    aiGradingRows.length > 0 &&
+    aiGradingTotal >= 95 &&
+    aiGradingTotal <= 105 &&
+    (manualGradingRows.length === 0 ||
+      manualGradingTotal < 95 ||
+      manualGradingTotal > 105);
+  const rawGradingRows =
+    shouldUseAiGrading || manualGradingRows.length === 0
+      ? aiGradingRows
+      : manualGradingRows;
+  const gradingRows = repairFinalExamWeight(rawGradingRows);
   const gradingChartData = getGradingChartData(gradingRows);
   const aiPoliciesText =
     aiSummary?.policies?.length ? aiSummary.policies.join("\n") : "";
@@ -858,6 +979,9 @@ export default function CourseDetailPage() {
     return place === "Online" ? "text-purple-600" : "text-blue-600";
   };
 
+  const isProjectUploadCalendarItem = (value: string) =>
+    /\bproject\s+upload\b/i.test(value) || /\bupload\s*#?\s*\d*\b/i.test(value);
+
   const getCalendarAssessment = (week: SyllabusWeek) => {
     const topic = String(week.topic || "");
     const todo = String(week.todo || "");
@@ -866,6 +990,9 @@ export default function CourseDetailPage() {
 
     if (combined.includes("final")) return "Final Exam Week";
     if (combined.includes("midterm")) return "Midterm Exam Week";
+    if (isProjectUploadCalendarItem(combined)) {
+      return todo || details || "Project Upload";
+    }
     if (
       combined.includes("quiz") ||
       combined.includes("assignment") ||
@@ -884,6 +1011,9 @@ export default function CourseDetailPage() {
 
     if (text.includes("final")) return "bg-red-50";
     if (text.includes("midterm")) return "bg-orange-50";
+    if (isProjectUploadCalendarItem(text)) {
+      return "bg-cyan-50";
+    }
 
     return "";
   };
@@ -893,6 +1023,9 @@ export default function CourseDetailPage() {
 
     if (text.includes("final")) return "text-red-900 font-semibold";
     if (text.includes("midterm")) return "text-orange-900 font-semibold";
+    if (isProjectUploadCalendarItem(text)) {
+      return "text-cyan-900 font-semibold";
+    }
 
     return "text-slate-700";
   };
@@ -902,6 +1035,9 @@ export default function CourseDetailPage() {
 
     if (text.includes("final")) return "text-red-700";
     if (text.includes("midterm")) return "text-orange-700";
+    if (isProjectUploadCalendarItem(text)) {
+      return "text-cyan-700";
+    }
 
     return "text-slate-600";
   };
@@ -912,6 +1048,9 @@ export default function CourseDetailPage() {
     if (text.includes("final")) return "text-red-900 font-bold";
     if (text.includes("midterm")) return "text-orange-900 font-bold";
     if (text.includes("quiz")) return "text-[rgb(45,175,24)] font-medium";
+    if (isProjectUploadCalendarItem(text)) {
+      return "text-cyan-900 font-bold";
+    }
     if (text.includes("assignment") || text.includes("project")) {
       return "text-slate-900 font-medium";
     }
@@ -1686,6 +1825,13 @@ export default function CourseDetailPage() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          <span className="h-3 w-3 rounded-full bg-cyan-600" />
+                          <span className="text-slate-600">
+                            Project Upload
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
                           <span className="h-3 w-3 rounded-full bg-orange-600" />
                           <span className="text-slate-600">
                             Midterm Exam Week
@@ -2239,8 +2385,7 @@ export default function CourseDetailPage() {
 
                   <p className="text-slate-700">
                     {displayedMoreInfo.contributionToProgram ||
-                      course.description ||
-                      "This course contributes to the program by helping students understand course expectations, manage syllabus-backed tasks, follow deadlines, and engage with structured academic resources throughout the semester."}
+                      "Not found in uploaded syllabus."}
                   </p>
                 </div>
 

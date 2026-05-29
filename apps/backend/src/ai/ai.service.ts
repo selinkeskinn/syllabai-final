@@ -269,7 +269,7 @@ Return this exact JSON shape:
     "classSchedule": "Wednesday 08:30",
     "classroom": "Check UMIS",
     "courseType": "Must",
-    "prerequisites": "Basic programming is recommended",
+    "prerequisites": "exact Prerequisite section text from the PDF",
     "courseObjectives": "course objectives paragraph"
   },
   "policySections": {
@@ -284,7 +284,7 @@ Return this exact JSON shape:
   },
   "moreInfo": {
     "learningOutcomes": ["one learning outcome"],
-    "contributionToProgram": "Contribution of the Course to the Program section text",
+    "contributionToProgram": "exact Contribution of the Course to the Program section text only when that heading exists in the PDF; otherwise return an empty string",
     "courseStructure": "Course Structure section text",
     "teachingMethods": ["Lecture", "Project"]
   },
@@ -788,10 +788,7 @@ ${context}`;
     );
     const extractedResources = this.extractCourseResources(text, resourceNames);
     const fallbackCourseInfo = {
-      credits: this.extractValueBetween(text, 'Course Credit / ECTS', [
-        'Classroom',
-        'Mode of Delivery',
-      ]),
+      credits: this.extractCourseCredits(text),
       classSchedule: this.extractValueBetween(text, 'Time', [
         'Course Credit',
         'Classroom',
@@ -800,10 +797,7 @@ ${context}`;
         'Mode of Delivery',
         'Course type',
       ]),
-      courseType: this.extractValueBetween(text, 'Course type', [
-        'Course ECTS',
-        'Prerequisite',
-      ]),
+      courseType: this.extractCourseType(text),
       prerequisites: this.extractPrerequisites(text),
       courseObjectives: this.extractCourseObjectives(text),
     };
@@ -861,9 +855,7 @@ ${context}`;
       instructorInfo: {
         office: this.extractInstructorOffice(text),
         officeHours: this.extractInstructorOfficeHours(text),
-        cvLink: this.asUrlString(
-          this.extractValueBetween(text, 'CV (link)', ['Course Information']),
-        ),
+        cvLink: this.extractCvLink(text),
       },
       courseInfo: fallbackCourseInfo,
       policySections: fallbackPolicySections,
@@ -1011,12 +1003,14 @@ ${context}`;
     return {
       office: primary.office || fallback.office,
       officeHours: primary.officeHours || fallback.officeHours,
-      cvLink: primary.cvLink || fallback.cvLink,
+      cvLink: fallback.cvLink || primary.cvLink,
     };
   }
 
   private asUrlString(value: unknown) {
-    const text = this.asString(value);
+    const rawText = this.asString(value).replace(/\s*-\s*/g, '-');
+    const urlMatch = rawText.match(/https?:\/\/[^\s]+/i);
+    const text = urlMatch?.[0] || rawText;
 
     if (!/^https?:\/\/\S+$/i.test(text) || text.includes('...')) {
       return '';
@@ -1035,16 +1029,61 @@ ${context}`;
     }
   }
 
+  private extractCourseType(text: string) {
+    const rawValue = this.extractValueBetween(text, 'Course type', [
+      'Course ECTS',
+      'Prerequisite',
+      'Course Objectives',
+      'Course Learning Outcomes',
+    ]);
+    const match = rawValue.match(
+      /\b(Must|Elective|Required|Compulsory|Mandatory|Optional)\b/i,
+    );
+
+    if (!match) {
+      return '';
+    }
+
+    const value = match[1].toLowerCase();
+
+    if (value === 'elective') return 'Elective';
+    if (value === 'optional') return 'Optional';
+    if (['must', 'required', 'compulsory', 'mandatory'].includes(value)) {
+      return value === 'must' ? 'Must' : 'Required';
+    }
+
+    return match[1];
+  }
+
+  private extractCourseCredits(text: string) {
+    const match = text.match(
+      /Course\s+Credit\s*\/\s*ECTS\s*:?\s*:?\s*(.+?)(?=\s+(?:Classroom|Mode\s+of\s+Delivery|Course\s+type|Prerequisite|Course\s+Objectives)\b)/i,
+    );
+    const value = this.cleanPdfText(match?.[1] || '');
+    const credits = value.match(/\b\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\b/);
+
+    return credits?.[0]?.replace(/\s+/g, '') || '';
+  }
+
+  private extractCvLink(text: string) {
+    return this.asUrlString(
+      this.extractValueBetween(text, 'CV (link)', [
+        'Course Information',
+        'Course Info',
+      ]),
+    );
+  }
+
   private mergeCourseInfo(
     primary: CourseSyllabusSummary['courseInfo'],
     fallback: CourseSyllabusSummary['courseInfo'],
   ) {
     return {
-      credits: primary.credits || fallback.credits,
-      classSchedule: primary.classSchedule || fallback.classSchedule,
-      classroom: primary.classroom || fallback.classroom,
-      courseType: primary.courseType || fallback.courseType,
-      prerequisites: primary.prerequisites || fallback.prerequisites,
+      credits: fallback.credits || primary.credits,
+      classSchedule: fallback.classSchedule || primary.classSchedule,
+      classroom: fallback.classroom || primary.classroom,
+      courseType: fallback.courseType || primary.courseType,
+      prerequisites: fallback.prerequisites || primary.prerequisites,
       courseObjectives: primary.courseObjectives || fallback.courseObjectives,
     };
   }
@@ -1075,8 +1114,7 @@ ${context}`;
       learningOutcomes: fallback.learningOutcomes.length
         ? fallback.learningOutcomes
         : primary.learningOutcomes,
-      contributionToProgram:
-        fallback.contributionToProgram || primary.contributionToProgram,
+      contributionToProgram: fallback.contributionToProgram,
       courseStructure: primary.courseStructure || fallback.courseStructure,
       teachingMethods: fallback.teachingMethods.length
         ? fallback.teachingMethods
@@ -1100,15 +1138,36 @@ ${context}`;
     primary: CourseSyllabusSummary['gradingItems'],
     fallback: CourseSyllabusSummary['gradingItems'],
   ) {
+    const totalWeight = (items: CourseSyllabusSummary['gradingItems']) =>
+      items.reduce((sum, item) => sum + this.extractWeightNumber(item.value), 0);
     const fallbackLooksStructured = fallback.some((item) =>
       /\|\s*\d+(?:\.\d+)?\s*\|\s*\d+(?:\.\d+)?\s*%/i.test(item.description),
     );
+    const fallbackTotal = totalWeight(fallback);
+    const primaryTotal = totalWeight(primary);
+
+    if (
+      fallbackLooksStructured &&
+      fallbackTotal >= 95 &&
+      fallbackTotal <= 105
+    ) {
+      return fallback;
+    }
+
+    if (primaryTotal >= 95 && primaryTotal <= 105) {
+      return primary;
+    }
 
     if (fallbackLooksStructured) {
       return fallback;
     }
 
     return primary.length ? primary : fallback;
+  }
+
+  private extractWeightNumber(value: string) {
+    const match = value.match(/(\d+(?:\.\d+)?)\s*%?/);
+    return match ? Number(match[1]) : 0;
   }
 
   private mergeWeeklyTopics(
@@ -1533,12 +1592,12 @@ ${context}`;
     }
 
     const knownAssignments =
-      'Project|Midterm|Final|Quiz|Homework|Assignment|Presentation|Participation|Lab|Exam';
+      'Coursera\\s+Application|Cousera\\s+Application|Final\\s+Exam|Midterm\\s+Exam|Project|Midterm|Final|Quiz|Homework|Assignment|Presentation|Participation|Lab|Exam';
     const normalized = section
       .replace(/\bAssignment\s+Description\s+Scoring\s+Weight\s*\(%\)/i, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-    const rows = Array.from(
+    const starredRows = Array.from(
       normalized.matchAll(
         new RegExp(
           `\\*\\s*(${knownAssignments})\\b\\s*([\\s\\S]*?)(?=\\s+\\*\\s*(?:${knownAssignments})\\b|\\s*$)`,
@@ -1546,10 +1605,20 @@ ${context}`;
         ),
       ),
     );
+    const rows = starredRows.length
+      ? starredRows
+      : Array.from(
+          normalized.matchAll(
+            new RegExp(
+              `(?:^|\\s)(${knownAssignments})\\b\\s*([\\s\\S]*?)(?=\\s+(?:${knownAssignments})\\b|\\s*$)`,
+              'g',
+            ),
+          ),
+        );
 
-    return rows
+    const parsedRows = rows
       .map((match) => {
-        const label = match[1].trim();
+        const label = this.normalizeGradingLabel(match[1]);
         const body = match[2].replace(/\s+/g, ' ').trim();
         const valueMatch = this.extractTrailingScoreAndWeight(body);
 
@@ -1569,11 +1638,13 @@ ${context}`;
         (item): item is { label: string; value: string; description: string } =>
           Boolean(item),
       );
+
+    return this.dedupeGradingItems(parsedRows);
   }
 
   private extractTrailingScoreAndWeight(value: string) {
     const numericTail = value.match(
-      /((?:\s+\d+(?:\.\d+)?){2,4})\s*%?\s*$/,
+      /(\d+(?:\.\d+)?\s*%?(?:\s+\d+(?:\.\d+)?\s*%?){1,5})\s*$/,
     );
 
     if (!numericTail || numericTail.index === undefined) {
@@ -1581,34 +1652,79 @@ ${context}`;
     }
 
     const description = value.slice(0, numericTail.index).trim();
-    const numbers = numericTail[1].trim().split(/\s+/);
+    let numbers = Array.from(
+      numericTail[1].matchAll(/\d+(?:\.\d+)?/g),
+    ).map((match) => match[0]);
 
     if (numbers.length < 2) {
       return null;
     }
 
-    const usableNumbers =
+    if (
       numbers.length >= 3 &&
-      numbers[numbers.length - 1].length === 1 &&
-      Number(numbers[numbers.length - 2]) > 9
-        ? numbers.slice(0, -1)
-        : numbers;
-    const last = usableNumbers[usableNumbers.length - 1];
-    const previous = usableNumbers[usableNumbers.length - 2];
-    const weight =
-      usableNumbers.length >= 3 && /^\d$/.test(previous) && /^\d$/.test(last)
-        ? `${previous}${last}`
-        : last;
-    const scoring =
-      usableNumbers.length >= 3 && /^\d$/.test(previous) && /^\d$/.test(last)
-        ? usableNumbers[usableNumbers.length - 3]
-        : previous;
+      /^\d$/.test(numbers[numbers.length - 1]) &&
+      Number(numbers[numbers.length - 2]) >= 10
+    ) {
+      numbers = numbers.slice(0, -1);
+    }
+
+    const { scoring, weight } = this.pickScoringAndWeight(numbers);
 
     return {
       description,
       scoring,
       weight: `${weight}%`,
     };
+  }
+
+  private pickScoringAndWeight(numbers: string[]) {
+    const last = numbers[numbers.length - 1];
+    const previous = numbers[numbers.length - 2];
+
+    if (
+      numbers.length >= 3 &&
+      /^\d$/.test(previous) &&
+      /^\d$/.test(last)
+    ) {
+      return {
+        scoring: numbers[numbers.length - 3],
+        weight: `${previous}${last}`,
+      };
+    }
+
+    return {
+      scoring: previous,
+      weight: last,
+    };
+  }
+
+  private normalizeGradingLabel(value: string) {
+    return value
+      .replace(/^\*+\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (letter) => letter.toUpperCase())
+      .replace(/^Cousera\b/, 'Coursera');
+  }
+
+  private dedupeGradingItems(
+    items: Array<{ label: string; value: string; description: string }>,
+  ) {
+    const byLabel = new Map<
+      string,
+      { label: string; value: string; description: string }
+    >();
+
+    for (const item of items) {
+      const key = item.label.toLowerCase();
+      const existing = byLabel.get(key);
+
+      if (!existing || item.description.length > existing.description.length) {
+        byLabel.set(key, item);
+      }
+    }
+
+    return Array.from(byLabel.values());
   }
 
   private splitResourceSection(section: string) {
@@ -1673,7 +1789,7 @@ ${context}`;
 
     return afterStart
       .slice(0, endMatch?.index ?? undefined)
-      .replace(/^[:\s-]+/, '')
+      .replace(/^\s*(?:\([^)]*\))?\s*[:\s-]*/, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -1884,7 +2000,11 @@ ${context}`;
     const firstTodoIndex = topicAndTodo.findIndex((line, index) => {
       if (index === 0) return false;
 
-      return /^-/.test(line) || /read|review|prepare|course schedule|expectation/i.test(line);
+      return (
+        /^-/.test(line) ||
+        /^(lecture|lab|practice)$/i.test(line) ||
+        /read|review|prepare|course schedule|expectation/i.test(line)
+      );
     });
     const topicLines =
       firstTodoIndex >= 0 ? topicAndTodo.slice(0, firstTodoIndex) : topicAndTodo;
@@ -1911,7 +2031,7 @@ ${context}`;
 
   private cleanCalendarTopicAndTodo(topic: string, todo: string) {
     const inlineTodoMatch = topic.match(
-      /^(.+?)\s+-\s+(Course\s+Schedule|Expectations|Review|Read\b|Prepare\b)(.+)?$/i,
+      /^(.+?)(?:\s+-\s+|\s+)(Course\s+Schedule|Expectations|Review|Read\b|Prepare\b|Lecture\b|Lab\b|Practice\b)(.+)?$/i,
     );
 
     if (!inlineTodoMatch) {
