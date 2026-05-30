@@ -49,8 +49,8 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
       return "Please enter your first and last name.";
     }
 
-    if (role === "STUDENT" && !studentId.trim()) {
-      return "Please enter your student ID.";
+    if (role === "STUDENT" && !/^\d{7}$/.test(studentId.trim())) {
+      return "Student ID must be exactly 7 digits.";
     }
 
     if (!normalizedEmail.endsWith(requiredDomain)) {
@@ -238,10 +238,13 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
                     value={studentId}
                     onChange={(e) => {
                       resetMessages();
-                      setStudentId(e.target.value);
+                      setStudentId(e.target.value.replace(/\D/g, "").slice(0, 7));
                     }}
+                    inputMode="numeric"
+                    maxLength={7}
+                    pattern="\d{7}"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                    placeholder="2026000001"
+                    placeholder="1234567"
                   />
                 </div>
               ) : null}

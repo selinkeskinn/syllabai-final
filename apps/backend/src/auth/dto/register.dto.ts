@@ -1,10 +1,4 @@
-import {
-  IsEmail,
-  IsIn,
-  IsOptional,
-  IsString,
-  MinLength,
-} from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class RegisterDto {
@@ -26,6 +20,9 @@ export class RegisterDto {
   @ApiPropertyOptional({ example: '2026000001' })
   @IsOptional()
   @IsString()
+  @Matches(/^\d{7}$/, {
+    message: 'Student ID must be exactly 7 digits',
+  })
   studentId?: string;
 
   @ApiProperty({ example: 'jane@bahcesehir.edu.tr' })

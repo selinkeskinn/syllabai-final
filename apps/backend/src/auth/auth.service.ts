@@ -98,6 +98,20 @@ export class AuthService {
     };
   }
 
+  private validateStudentId(studentId?: string) {
+    const normalizedStudentId = studentId?.trim();
+
+    if (!normalizedStudentId) {
+      throw new BadRequestException('Student ID is required for student accounts');
+    }
+
+    if (!/^\d{7}$/.test(normalizedStudentId)) {
+      throw new BadRequestException('Student ID must be exactly 7 digits');
+    }
+
+    return normalizedStudentId;
+  }
+
   private validateEmailDomain(
     email: string,
     role: 'STUDENT' | 'INSTRUCTOR',
@@ -128,6 +142,9 @@ export class AuthService {
     const firstName = dto.firstName?.trim() || undefined;
     const lastName = dto.lastName?.trim() || undefined;
     const fullName = dto.name?.trim();
+
+    const normalizedStudentId =
+      dto.role === 'STUDENT' ? this.validateStudentId(dto.studentId) : undefined;
 
     if (fullName) {
       return {

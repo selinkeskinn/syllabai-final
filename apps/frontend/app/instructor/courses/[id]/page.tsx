@@ -1365,7 +1365,7 @@ export default function InstructorCourseDetailPage() {
     deliveryMethod:
       course?.deliveryMethod ||
       manualOverrides.courseInfo?.deliveryMethod ||
-      "In-Person",
+      "Face-to-Face",
     courseType:
       manualOverrides.courseInfo?.courseType || aiCourseInfo?.courseType || "",
     prerequisites:
@@ -1630,9 +1630,9 @@ export default function InstructorCourseDetailPage() {
           makeInput("classroom", "Classroom"),
           {
             key: "deliveryMethod",
-            label: "Delivery Method",
+            label: "Course Format",
             type: "select",
-            options: ["In-Person", "Online", "Hybrid"],
+            options: ["Face-to-Face", "Online", "Hybrid"],
           },
           makeInput("courseType", "Course Type"),
         ],
@@ -1925,7 +1925,7 @@ export default function InstructorCourseDetailPage() {
 
     if (overrideEditor.section === "courseDetails") {
       const nextDeliveryMethod =
-        overrideForm.deliveryMethod?.trim() || "In-Person";
+        overrideForm.deliveryMethod?.trim() || "Face-to-Face";
       nextOverrides.courseInfo = {
         ...nextOverrides.courseInfo,
         credits: overrideForm.credits?.trim() || undefined,
@@ -2461,7 +2461,7 @@ export default function InstructorCourseDetailPage() {
 
                       <div>
                         <p className="mb-1 text-xs text-slate-500">
-                          Delivery Method
+                          Course Format
                         </p>
                         <p className="text-sm text-slate-900">
                           {displayedCourseInfo.deliveryMethod ||

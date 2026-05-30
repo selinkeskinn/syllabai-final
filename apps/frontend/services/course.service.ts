@@ -94,7 +94,7 @@ export const courseService = {
         formData.append("description", data.description);
       }
       formData.append("semester", data.semester);
-      formData.append("deliveryMethod", data.deliveryMethod || "In-Person");
+      formData.append("deliveryMethod", data.deliveryMethod || "Face-to-Face");
       formData.append("file", data.file);
 
       const response = await api.post("/courses", formData, {
@@ -111,7 +111,7 @@ export const courseService = {
       title: data.title,
       ...(data.description ? { description: data.description } : {}),
       semester: data.semester,
-      deliveryMethod: data.deliveryMethod || "In-Person",
+      deliveryMethod: data.deliveryMethod || "Face-to-Face",
     });
     return response.data;
   },
