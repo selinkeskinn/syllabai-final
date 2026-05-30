@@ -149,11 +149,18 @@ export class DeadlinesService {
   }
 
   private async findCalendarDeadlines(where: any) {
+    const { courseId, ...courseFilters } = where ?? {};
+    const courseWhere: any = {
+      archivedAt: null,
+      ...courseFilters,
+    };
+
+    if (courseId) {
+      courseWhere.id = courseId;
+    }
+
     const courses = await this.prisma.course.findMany({
-      where: {
-        archivedAt: null,
-        ...where,
-      },
+      where: courseWhere,
       include: {
         syllabus: {
           include: {
