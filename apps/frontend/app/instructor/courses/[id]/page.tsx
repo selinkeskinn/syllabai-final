@@ -2189,9 +2189,7 @@ export default function InstructorCourseDetailPage() {
                     <div className="mb-5 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Bell className="h-5 w-5 text-blue-600" />
-                        <h2 className="text-lg font-semibold text-slate-900">
-                          Latest Announcements
-                        </h2>
+                        <h2 className="text-xl font-semibold tracking-tight text-slate-900">Latest Announcements</h2>
                       </div>
 
                       <Link
@@ -2268,9 +2266,7 @@ export default function InstructorCourseDetailPage() {
                     <div className="mb-5 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Calendar className="h-5 w-5 text-blue-600" />
-                        <h2 className="text-lg font-semibold text-slate-900">
-                          Upcoming Deadlines
-                        </h2>
+                        <h2 className="text-xl font-semibold tracking-tight text-slate-900">Upcoming Deadlines</h2>
                       </div>
 
                       <Link

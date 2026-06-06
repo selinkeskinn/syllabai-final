@@ -1097,11 +1097,6 @@ export default function CourseDetailPage() {
                   <span className="mx-2 text-slate-300">•</span>
                   {course.semester || "Current Term"}
                 </p>
-                {course.description ? (
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                    {course.description}
-                  </p>
-                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5 xl:justify-end">
@@ -1118,27 +1113,29 @@ export default function CourseDetailPage() {
 
           <div className="border-t border-slate-200">
             <div className="px-8">
-              <div className="flex overflow-x-auto">
-                {tabConfig.map((tab) => {
-                  const Icon = tab.icon;
-                  const isActive = activeTab === tab.key;
+              <div className="flex justify-center overflow-hidden">
+                <div className="flex w-full max-w-6xl items-center justify-center gap-5 pr-8">
+                  {tabConfig.map((tab) => {
+                    const Icon = tab.icon;
+                    const isActive = activeTab === tab.key;
 
-                  return (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setActiveTab(tab.key)}
-                      className={`inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-[15px] font-medium transition ${
-                        isActive
-                          ? "border-blue-500 text-blue-600"
-                          : "border-transparent text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      {tab.label}
-                    </button>
-                  );
-                })}
+                    return (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        onClick={() => setActiveTab(tab.key)}
+                        className={`inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-1.5 py-3 text-[15px] font-medium transition-colors ${
+                          isActive
+                            ? "border-blue-500 text-blue-600"
+                            : "border-transparent text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
@@ -1160,9 +1157,7 @@ export default function CourseDetailPage() {
                   <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                     <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div>
-                        <h3 className="text-[15px] font-semibold text-slate-900">
-                          Latest Announcements
-                        </h3>
+                        <h2 className="text-xl font-semibold tracking-tight text-slate-900">Latest Announcements</h2>
                         <p className="mt-2 text-sm text-slate-500">
                           Important course updates and class notices.
                         </p>
@@ -1254,12 +1249,8 @@ export default function CourseDetailPage() {
                           <CalendarDays className="h-5 w-5" />
                         </div>
                         <div>
-                          <h3 className="text-xl font-bold text-slate-900">
-                            Upcoming Deadlines
-                          </h3>
-                          <p className="text-sm text-slate-500">
-                            What needs your attention next.
-                          </p>
+                          <h2 className="text-xl font-semibold tracking-tight text-slate-900">Upcoming Deadlines</h2>
+                          <p className="mt-1 text-sm text-slate-500">What needs your attention next.</p>
                         </div>
                       </div>
 
@@ -1307,12 +1298,8 @@ export default function CourseDetailPage() {
                           <NotebookText className="h-5 w-5" />
                         </div>
                         <div>
-                          <h3 className="text-xl font-bold text-slate-900">
-                            Syllabus Snapshot
-                          </h3>
-                          <p className="text-sm text-slate-500">
-                            A compact view of the course structure.
-                          </p>
+                          <h2 className="text-xl font-semibold tracking-tight text-slate-900">Syllabus Snapshot</h2>
+                          <p className="mt-1 text-sm text-slate-500">A compact view of the course structure.</p>
                         </div>
                       </div>
 

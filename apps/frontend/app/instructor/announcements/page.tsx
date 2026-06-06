@@ -13,7 +13,6 @@ import {
   Calendar,
   Edit2,
   Filter,
-  Plus,
   Trash2,
   X,
 } from "lucide-react";
@@ -354,14 +353,6 @@ export default function InstructorAnnouncementsPage() {
             </div>
 
             <div className="relative flex items-center gap-3">
-              <button
-                type="button"
-                onClick={openCreateModal}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
-              >
-                <Plus className="h-4 w-4" />
-                New Announcement
-              </button>
 
               <button
                 type="button"
