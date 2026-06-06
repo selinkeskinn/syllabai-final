@@ -1097,11 +1097,6 @@ export default function CourseDetailPage() {
                   <span className="mx-2 text-slate-300">•</span>
                   {course.semester || "Current Term"}
                 </p>
-                {course.description ? (
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                    {course.description}
-                  </p>
-                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5 xl:justify-end">
