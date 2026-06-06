@@ -283,11 +283,11 @@ export default function CoursesPage() {
           )}
 
           {loading ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-6 text-slate-500">
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-slate-500 h-full flex flex-col">
               Loading courses...
             </div>
           ) : courses.length === 0 ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-6 text-slate-500">
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-slate-500 h-full flex flex-col">
               No courses found. Enter a course key above to join your first
               course.
             </div>
@@ -321,8 +321,7 @@ export default function CoursesPage() {
                       </div>
 
                       <div className="mb-5 pr-20">
-                        <h3 className="mb-1 text-lg font-semibold text-slate-900">
-                          {course.title}
+                        <h3 className="mb-1 text-lg font-semibold text-slate-900 min-h-[56px] leading-snug">{course.title}
                         </h3>
                         <p className="text-sm text-slate-600">
                           {course.instructor?.name || "Instructor User"}

@@ -162,6 +162,36 @@ const tabConfig: TabConfig[] = [
   },
 ];
 
+const getCourseAccentClasses = (courseCode?: string | null) => {
+  const normalizedCode = courseCode?.trim().toUpperCase() ?? "";
+
+  if (normalizedCode.startsWith("IE")) {
+    return {
+      active: "border-orange-600 bg-orange-100 text-orange-900 shadow-sm",
+      icon: "text-orange-600",
+    };
+  }
+
+  if (normalizedCode.startsWith("SEN")) {
+    return {
+      active: "border-blue-600 bg-blue-100 text-blue-900 shadow-sm",
+      icon: "text-blue-600",
+    };
+  }
+
+  if (normalizedCode.startsWith("CS") || normalizedCode.startsWith("SE")) {
+    return {
+      active: "border-violet-600 bg-violet-100 text-violet-900 shadow-sm",
+      icon: "text-violet-600",
+    };
+  }
+
+  return {
+    active: "border-blue-600 bg-blue-100 text-blue-900 shadow-sm",
+    icon: "text-blue-600",
+  };
+};
+
 const resourceIcons: LucideIcon[] = [
   BookOpen,
   NotebookText,
@@ -1102,7 +1132,7 @@ export default function CourseDetailPage() {
               <div className="flex flex-wrap items-center gap-2.5 xl:justify-end">
                 <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-blue-500">
                   <p className="text-sm font-medium">
-                    Academic Week: {loadingSyllabus ? "..." : syllabusWeeks.length}
+                    Academic Week: 8
                   </p>
                 </div>
                 <NotificationBell />
@@ -1114,23 +1144,24 @@ export default function CourseDetailPage() {
           <div className="border-t border-slate-200">
             <div className="px-8">
               <div className="flex justify-center overflow-hidden">
-                <div className="flex w-full max-w-6xl items-center justify-center gap-5 pr-8">
+                <div className="flex w-full max-w-6xl items-center justify-center gap-3 pr-4">
                   {tabConfig.map((tab) => {
                     const Icon = tab.icon;
                     const isActive = activeTab === tab.key;
+                  const courseAccent = getCourseAccentClasses(course?.code);
 
                     return (
                       <button
                         key={tab.key}
                         type="button"
                         onClick={() => setActiveTab(tab.key)}
-                        className={`inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-1.5 py-3 text-[15px] font-medium transition-colors ${
+                        className={`inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap rounded-lg border-b-2 px-2 py-2 text-sm font-semibold transition-colors ${
                           isActive
-                            ? "border-blue-500 text-blue-600"
-                            : "border-transparent text-slate-600 hover:text-slate-900"
+                            ? courseAccent.active
+                            : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                         }`}
                       >
-                        <Icon className="h-4 w-4 shrink-0" />
+                        <Icon className={`h-4 w-4 shrink-0 ${isActive ? courseAccent.icon : ""}`} />
                         <span>{tab.label}</span>
                       </button>
                     );
