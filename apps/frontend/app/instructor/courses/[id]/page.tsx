@@ -190,6 +190,36 @@ const tabs: { id: TabType; label: string; icon: LucideIcon }[] = [
   { id: "moreInfo", label: "More Info", icon: FileText },
 ];
 
+const getCourseAccentClasses = (courseCode?: string | null) => {
+  const normalizedCode = courseCode?.trim().toUpperCase() ?? "";
+
+  if (normalizedCode.startsWith("IE")) {
+    return {
+      active: "border-orange-600 bg-orange-100 text-orange-900 shadow-sm",
+      icon: "text-orange-600",
+    };
+  }
+
+  if (normalizedCode.startsWith("SEN")) {
+    return {
+      active: "border-blue-600 bg-blue-100 text-blue-900 shadow-sm",
+      icon: "text-blue-600",
+    };
+  }
+
+  if (normalizedCode.startsWith("CS") || normalizedCode.startsWith("SE")) {
+    return {
+      active: "border-violet-600 bg-violet-100 text-violet-900 shadow-sm",
+      icon: "text-violet-600",
+    };
+  }
+
+  return {
+    active: "border-blue-600 bg-blue-100 text-blue-900 shadow-sm",
+    icon: "text-blue-600",
+  };
+};
+
 const gradingColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"];
 
 const policyTopics: { id: PolicyTab; label: string; group: "policies" | "ethics" }[] = [
@@ -2071,27 +2101,30 @@ export default function InstructorCourseDetailPage() {
             </header>
 
             <div className="border-b border-slate-200 bg-white px-8">
-              <div className="flex gap-3 overflow-x-auto">
+              <div className="flex justify-center overflow-hidden">
+                <div className="flex w-full max-w-6xl items-center justify-center gap-3 pr-4">
                 {tabs.map((tab) => {
                   const Icon = tab.icon;
                   const isActive = activeTab === tab.id;
+                  const courseAccent = getCourseAccentClasses(course?.code);
 
                   return (
                     <button
                       key={tab.id}
                       type="button"
                       onClick={() => setActiveTab(tab.id)}
-                      className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-3 transition-colors ${
+                      className={`inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap rounded-lg border-b-2 px-2 py-2 text-sm font-semibold transition-colors ${
                         isActive
-                          ? "border-blue-500 font-semibold text-blue-600"
-                          : "border-transparent text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                          ? courseAccent.active
+                          : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                       }`}
                     >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span className="text-[15px]">{tab.label}</span>
+                      <Icon className={`h-4 w-4 shrink-0 ${isActive ? courseAccent.icon : ""}`} />
+                      <span>{tab.label}</span>
                     </button>
                   );
                 })}
+                </div>
               </div>
             </div>
 
