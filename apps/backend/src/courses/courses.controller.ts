@@ -155,6 +155,15 @@ export class CoursesController {
     };
   }
 
+  @Patch(':id/restore')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('INSTRUCTOR')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Restore archived course' })
+  restoreCourse(@Param('id') id: string, @Request() req: any) {
+    return this.coursesService.restore(id, req.user.userId);
+  }
+
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('INSTRUCTOR')

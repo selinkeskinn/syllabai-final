@@ -210,6 +210,37 @@ findArchivedByInstructor(instructorId: string) {
     });
   }
 
+  async restore(id: string, instructorId: string) {
+    const course = await this.prisma.course.findUnique({
+      where: { id },
+      include: {
+        instructor: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+        syllabus: true,
+        _count: { select: { enrollments: true } },
+      },
+    });
+
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
+
+    this.assertCourseOwner(course.instructorId, instructorId);
+
+    return this.prisma.course.update({
+      where: { id },
+      data: { archivedAt: null },
+      include: {
+        instructor: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+        syllabus: true,
+        _count: { select: { enrollments: true } },
+      },
+    });
+  }
+
   async leaveCourse(userId: string, courseId: string) {
     const enrollment = await this.prisma.enrollment.findFirst({
       where: {
