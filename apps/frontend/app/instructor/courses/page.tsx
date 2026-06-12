@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import InstructorLayout from "@/components/InstructorLayout";
 import { courseService } from "@/services/course.service";
-import { Archive, Plus } from "lucide-react";
+import { Archive, Plus, RotateCcw } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import SettingsButton from "@/components/SettingsButton";
 
@@ -58,6 +58,7 @@ export default function InstructorCoursesPage() {
   const [archivedCourses, setArchivedCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchCourses = async () => {
@@ -105,6 +106,33 @@ export default function InstructorCoursesPage() {
       window.alert("Course could not be archived. Please try again.");
     } finally {
       setArchivingId(null);
+    }
+  };
+
+  const handleRestoreCourse = async (course: any) => {
+    const confirmed = window.confirm(
+      `Restore "${course.code} - ${course.title}"? It will be shown in active courses again.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setRestoringId(course.id);
+      const restoredCourse = await courseService.restoreCourse(course.id);
+
+      setArchivedCourses((currentArchivedCourses) =>
+        currentArchivedCourses.filter((item) => item.id !== course.id)
+      );
+
+      setCourses((currentCourses) => [
+        restoredCourse || { ...course, archivedAt: null },
+        ...currentCourses.filter((item) => item.id !== course.id),
+      ]);
+    } catch (error) {
+      console.error("Restore course error:", error);
+      window.alert("Course could not be restored. Please try again.");
+    } finally {
+      setRestoringId(null);
     }
   };
 
@@ -295,10 +323,22 @@ export default function InstructorCoursesPage() {
                             </p>
                           </div>
 
-                          <div className="border-t border-slate-200 pt-4 text-sm text-slate-500">
-                            {course.archivedAt
-                              ? `Archived on ${new Date(course.archivedAt).toLocaleDateString()}`
-                              : "Archived course"}
+                          <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-4">
+                            <div className="text-sm text-slate-500">
+                              {course.archivedAt
+                                ? `Archived on ${new Date(course.archivedAt).toLocaleDateString()}`
+                                : "Archived course"}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreCourse(course)}
+                              disabled={restoringId === course.id}
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                              {restoringId === course.id ? "Restoring..." : "Restore"}
+                            </button>
                           </div>
                         </div>
                       </article>

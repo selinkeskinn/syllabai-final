@@ -139,6 +139,11 @@ export const courseService = {
     return response.data;
   },
 
+  async restoreCourse(id: string): Promise<CourseSummary> {
+    const response = await api.patch(`/courses/${id}/restore`);
+    return response.data;
+  },
+
   async leaveCourse(
     id: string
   ): Promise<{ message: string; courseId: string }> {
