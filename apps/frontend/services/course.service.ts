@@ -73,6 +73,11 @@ export const courseService = {
     return normalizeCourseList(response.data);
   },
 
+  async getArchivedInstructorCourses(): Promise<CourseSummary[]> {
+    const response = await api.get("/courses/archived");
+    return normalizeCourseList(response.data);
+  },
+
   async getCourseById(id: string) {
     const response = await api.get(`/courses/${id}`);
     return response.data;
@@ -131,6 +136,11 @@ export const courseService = {
 
   async archiveCourse(id: string): Promise<CourseSummary> {
     const response = await api.delete(`/courses/${id}`);
+    return response.data;
+  },
+
+  async restoreCourse(id: string): Promise<CourseSummary> {
+    const response = await api.patch(`/courses/${id}/restore`);
     return response.data;
   },
 
