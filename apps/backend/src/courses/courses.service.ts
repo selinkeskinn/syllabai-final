@@ -68,6 +68,20 @@ export class CoursesService {
       orderBy: { createdAt: 'desc' },
     });
   }
+findArchivedByInstructor(instructorId: string) {
+  return this.prisma.course.findMany({
+    where: {
+      instructorId,
+      archivedAt: { not: null },
+    },
+    include: {
+      syllabus: true,
+      _count: { select: { enrollments: true } },
+    },
+    orderBy: { archivedAt: 'desc' },
+  });
+}
+
 
   async findEnrolled(userId: string) {
     const enrollments = await this.prisma.enrollment.findMany({
