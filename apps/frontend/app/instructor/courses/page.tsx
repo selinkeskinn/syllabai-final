@@ -55,17 +55,24 @@ const courseVisuals = [
 
 export default function InstructorCoursesPage() {
   const [courses, setCourses] = useState<any[]>([]);
+  const [archivedCourses, setArchivedCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [archivingId, setArchivingId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchCourses = async () => {
       try {
-        const data = await courseService.getMyCourses();
-        setCourses(Array.isArray(data) ? data : []);
+        const [activeData, archivedData] = await Promise.all([
+          courseService.getMyCourses(),
+          courseService.getArchivedInstructorCourses(),
+        ]);
+
+        setCourses(Array.isArray(activeData) ? activeData : []);
+        setArchivedCourses(Array.isArray(archivedData) ? archivedData : []);
       } catch (error) {
         console.error("Instructor courses fetch error:", error);
         setCourses([]);
+        setArchivedCourses([]);
       } finally {
         setLoading(false);
       }
@@ -83,10 +90,16 @@ export default function InstructorCoursesPage() {
 
     try {
       setArchivingId(course.id);
-      await courseService.archiveCourse(course.id);
+      const archivedCourse = await courseService.archiveCourse(course.id);
+
       setCourses((currentCourses) =>
         currentCourses.filter((item) => item.id !== course.id)
       );
+
+      setArchivedCourses((currentArchivedCourses) => [
+        archivedCourse || { ...course, archivedAt: new Date().toISOString() },
+        ...currentArchivedCourses.filter((item) => item.id !== course.id),
+      ]);
     } catch (error) {
       console.error("Archive course error:", error);
       window.alert("Course could not be archived. Please try again.");
@@ -223,6 +236,77 @@ export default function InstructorCoursesPage() {
                 </div>
               </Link>
             </div>
+          )}
+
+          {!loading && (
+            <section className="mt-10">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold text-slate-900">
+                    Archived Courses
+                  </h2>
+                  <p className="text-sm text-slate-500">
+                    Courses you archived are listed here.
+                  </p>
+                </div>
+
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  {archivedCourses.length} archived
+                </span>
+              </div>
+
+              {archivedCourses.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
+                  No archived courses yet.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+                  {archivedCourses.map((course, index) => {
+                    const visual =
+                      courseVisuals[(index + courses.length) % courseVisuals.length];
+
+                    return (
+                      <article
+                        key={course.id}
+                        className="overflow-hidden rounded-xl border border-slate-200 bg-white opacity-90"
+                      >
+                        <div className="h-3 bg-slate-300" />
+
+                        <div className="relative p-6">
+                          <div className="absolute right-4 top-4 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                            Archived
+                          </div>
+
+                          <div className="mb-4 flex items-center gap-3">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-100 text-2xl">
+                              {visual.icon}
+                            </div>
+                          </div>
+
+                          <div className="mb-5">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              {course.code}
+                            </p>
+                            <h3 className="mb-1 text-lg font-semibold text-slate-900">
+                              {course.title}
+                            </h3>
+                            <p className="text-sm text-slate-600">
+                              {course.instructor?.name || "Instructor User"}
+                            </p>
+                          </div>
+
+                          <div className="border-t border-slate-200 pt-4 text-sm text-slate-500">
+                            {course.archivedAt
+                              ? `Archived on ${new Date(course.archivedAt).toLocaleDateString()}`
+                              : "Archived course"}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           )}
         </main>
       </div>
