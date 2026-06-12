@@ -90,6 +90,15 @@ export class CoursesController {
     return this.coursesService.findByInstructor(req.user.userId);
   }
 
+  @Get('archived')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('INSTRUCTOR')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get instructor archived courses' })
+  findArchivedCourses(@Request() req: any) {
+    return this.coursesService.findArchivedByInstructor(req.user.userId);
+  }
+
   @Get('enrolled')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

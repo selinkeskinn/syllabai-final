@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import InstructorLayout from "@/components/InstructorLayout";
-import { aiService } from "@/services/ai.service";
+import { syllabusService } from "@/services/syllabus.service";
 import { Upload, X } from "lucide-react";
 
 const ACCEPTED_FILE_TYPES = "application/pdf,.pdf";
@@ -53,7 +53,7 @@ export default function NewSyllabusPage() {
       setErrorMessage("");
       setSuccessMessage("");
 
-      await aiService.uploadCourseResource(courseId, selectedFile);
+      await syllabusService.uploadSyllabusDocument(courseId, selectedFile);
 
       setSuccessMessage("PDF uploaded. AI indexing is running. Redirecting...");
 
