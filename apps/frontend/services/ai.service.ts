@@ -29,6 +29,12 @@ export type CourseAiAskResponse = {
   sources: CourseAiSource[];
 };
 
+export type InstructorAdviceType =
+  | "SYLLABUS_GAP_ANALYSIS"
+  | "GRADING_CONSISTENCY_CHECK"
+  | "RESOURCE_RECOMMENDATION"
+  | "ANNOUNCEMENT_DRAFT_GENERATOR";
+
 export type CourseAiSyllabusSummary = {
   courseSummary: string;
   instructorInfo: {
@@ -117,16 +123,26 @@ export const aiService = {
 
   async askCourseQuestion(
     courseId: string,
-    question: string
+    question: string,
+    adviceType?: InstructorAdviceType
   ): Promise<CourseAiAskResponse> {
-    const response = await api.post(`/courses/${courseId}/ai/ask`, {
-      question,
-    });
+    const response = await api.post(
+      `/courses/${courseId}/ai/ask`,
+      {
+        question,
+        ...(adviceType ? { adviceType } : {}),
+      },
+      {
+        timeout: 35000,
+      }
+    );
     return response.data;
   },
 
   async getSyllabusSummary(courseId: string): Promise<CourseAiSyllabusSummary> {
-    const response = await api.get(`/courses/${courseId}/ai/syllabus-summary`);
+    const response = await api.get(`/courses/${courseId}/ai/syllabus-summary`, {
+      timeout: 30000,
+    });
     return response.data;
   },
 };
