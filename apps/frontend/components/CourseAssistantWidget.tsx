@@ -20,6 +20,7 @@ import {
   aiService,
   CourseAiResource,
   CourseAiSource,
+  InstructorAdviceType,
 } from "@/services/ai.service";
 import { courseService, CourseSummary } from "@/services/course.service";
 
@@ -63,9 +64,50 @@ const noIndexedResourcesMessage =
 
 const quickQuestions = [
   "What is the grading policy?",
-  "When is the final project due?",
+  "Which week is the final exam?",
   "What is the Week 3 topic?",
   "What are the office hours?",
+];
+
+const instructorAdvisorActions: Array<{
+  title: string;
+  description: string;
+  question: string;
+  adviceType: InstructorAdviceType;
+  icon: typeof AlertTriangle;
+}> = [
+  {
+    title: "Gap Analysis",
+    description: "Find missing or unclear syllabus areas.",
+    question:
+      "Run a syllabus gap analysis. Which areas are missing, weak, or unclear?",
+    adviceType: "SYLLABUS_GAP_ANALYSIS",
+    icon: AlertTriangle,
+  },
+  {
+    title: "Grading Check",
+    description: "Check weights, descriptions, and consistency.",
+    question:
+      "Check the grading consistency. Do the weights, scoring, and descriptions match?",
+    adviceType: "GRADING_CONSISTENCY_CHECK",
+    icon: CheckCircle2,
+  },
+  {
+    title: "Resources",
+    description: "Suggest optional books or study resources.",
+    question:
+      "Recommend optional course resources based on the syllabus topics. Mark them as instructor-review-required.",
+    adviceType: "RESOURCE_RECOMMENDATION",
+    icon: Files,
+  },
+  {
+    title: "Announcement",
+    description: "Draft a short course announcement.",
+    question:
+      "Draft useful announcement options for upcoming syllabus events or important course reminders.",
+    adviceType: "ANNOUNCEMENT_DRAFT_GENERATOR",
+    icon: MessageCircle,
+  },
 ];
 
 const formatResourceError = (message?: string | null) =>
@@ -89,6 +131,7 @@ export default function CourseAssistantWidget({
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState("");
   const messageListRef = useRef<HTMLDivElement>(null);
+  const messageIdRef = useRef(0);
   const messages = messagesByCourse[selectedCourseId] ?? [];
 
   useEffect(() => {
@@ -213,10 +256,11 @@ export default function CourseAssistantWidget({
           };
   const StatusIcon = statusTone.icon;
 
-  const handleAsk = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    const cleanQuestion = question.trim();
+  const askAssistant = async (
+    rawQuestion: string,
+    adviceType?: InstructorAdviceType
+  ) => {
+    const cleanQuestion = rawQuestion.trim();
     if (!selectedCourseId || !cleanQuestion || asking) return;
 
     if (!assistantReady) {
@@ -225,7 +269,7 @@ export default function CourseAssistantWidget({
     }
 
     const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
+      id: `user-${(messageIdRef.current += 1)}`,
       role: "user",
       content: cleanQuestion,
     };
@@ -241,7 +285,8 @@ export default function CourseAssistantWidget({
     try {
       const response = await aiService.askCourseQuestion(
         selectedCourseId,
-        cleanQuestion
+        cleanQuestion,
+        adviceType
       );
 
       setMessagesByCourse((current) => ({
@@ -249,7 +294,7 @@ export default function CourseAssistantWidget({
         [selectedCourseId]: [
           ...(current[selectedCourseId] ?? []),
           {
-            id: `assistant-${Date.now()}`,
+            id: `assistant-${(messageIdRef.current += 1)}`,
             role: "assistant",
             content: response.answer,
             sources: response.sources,
@@ -266,6 +311,11 @@ export default function CourseAssistantWidget({
     } finally {
       setAsking(false);
     }
+  };
+
+  const handleAsk = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await askAssistant(question);
   };
 
   return (
@@ -376,19 +426,55 @@ export default function CourseAssistantWidget({
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-2">
-                    {quickQuestions.map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        onClick={() => setQuestion(item)}
-                        disabled={!assistantReady}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-xs font-medium text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
+                  {role === "instructor" ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        <Sparkles className="h-3.5 w-3.5 text-blue-500" />
+                        Instructor Advisor
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {instructorAdvisorActions.map((action) => {
+                          const ActionIcon = action.icon;
+
+                          return (
+                            <button
+                              key={action.adviceType}
+                              type="button"
+                              onClick={() =>
+                                askAssistant(action.question, action.adviceType)
+                              }
+                              disabled={!assistantReady || asking}
+                              className="rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-900">
+                                <ActionIcon className="h-4 w-4 text-blue-600" />
+                                {action.title}
+                              </div>
+                              <p className="text-[11px] leading-4 text-slate-500">
+                                {action.description}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {role === "student" ? (
+                    <div className="grid grid-cols-1 gap-2">
+                      {quickQuestions.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => setQuestion(item)}
+                          disabled={!assistantReady}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-xs font-medium text-slate-600 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 messages.map((message) => (

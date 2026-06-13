@@ -145,8 +145,7 @@ export default function InstructorDashboardPage() {
       try {
         const data = await courseService.getAllCourses();
         setCourses(Array.isArray(data) ? data : []);
-      } catch (error) {
-        console.error("Instructor dashboard courses fetch error:", error);
+      } catch {
         setCourses([]);
       } finally {
         setLoadingCourses(false);
@@ -168,8 +167,7 @@ export default function InstructorDashboardPage() {
         if (upcoming) {
           setWeekStart(getStartOfWeek(upcoming));
         }
-      } catch (error) {
-        console.error("Instructor dashboard deadlines fetch error:", error);
+      } catch {
         setDeadlines([]);
       } finally {
         setLoadingDeadlines(false);
@@ -180,8 +178,7 @@ export default function InstructorDashboardPage() {
       try {
         const data = await announcementService.getAllAnnouncements();
         setAnnouncements(Array.isArray(data) ? data : []);
-      } catch (error) {
-        console.error("Instructor dashboard announcements fetch error:", error);
+      } catch {
         setAnnouncements([]);
       } finally {
         setLoadingAnnouncements(false);

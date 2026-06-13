@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AiProviderService } from './ai-provider.service';
 import { AskResponseDto } from './dto/ask-response.dto';
+import { InstructorAdviceType } from './dto/ask-question.dto';
 import { ChatDto } from './dto/chat.dto';
 
 type CourseSyllabusSummary = {
@@ -60,6 +61,8 @@ type CourseSyllabusSummary = {
   sourceCount: number;
 };
 
+const CURRENT_ACADEMIC_WEEK = 8;
+
 @Injectable()
 export class AiService {
   private readonly syllabusSummaryCache = new Map<
@@ -77,6 +80,7 @@ export class AiService {
     role: string,
     courseId: string,
     rawQuestion: string,
+    adviceType?: InstructorAdviceType,
   ): Promise<AskResponseDto> {
     const question = rawQuestion.trim();
 
@@ -100,6 +104,10 @@ export class AiService {
 
     await this.ensureCourseAccess(userId, role, course.id, course.instructorId);
 
+    if (adviceType && role !== 'INSTRUCTOR') {
+      throw new ForbiddenException('Instructor advice is only available to instructors');
+    }
+
     const readyResourceCount = await this.prisma.courseResource.count({
       where: {
         courseId,
@@ -113,7 +121,11 @@ export class AiService {
       );
     }
 
-    const questionEmbedding = await this.aiProvider.createEmbedding(question);
+    const questionEmbedding = await this.withTimeout(
+      this.aiProvider.createEmbedding(question),
+      10000,
+      'AI embedding timed out',
+    );
     const candidates = await this.prisma.resourceChunk.findMany({
       where: {
         courseId,
@@ -166,12 +178,19 @@ export class AiService {
       })
       .map((chunk) => chunk.content)
       .join('\n');
-    const deterministicAnswer = this.generateDeterministicRagAnswer(
-      question,
-      fullCourseText,
-    );
+    const deterministicAnswer = adviceType
+      ? null
+      : this.generateDeterministicRagAnswer(question, fullCourseText);
     const answer =
-      deterministicAnswer ?? (await this.generateRagAnswer(question, context));
+      deterministicAnswer ??
+      (adviceType
+        ? await this.generateInstructorAdvice(
+            adviceType,
+            question,
+            fullCourseText,
+            context,
+          )
+        : await this.generateRagAnswer(question, context, role));
     const sourceMatches = deterministicAnswer
       ? [...matches].sort(
           (a, b) =>
@@ -306,10 +325,17 @@ PDF text:
 ${context}`;
 
     try {
-      const rawAnswer = await this.aiProvider.createAnswer([
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ]);
+      const rawAnswer = await this.withTimeout(
+        this.aiProvider.createAnswer([
+          {
+            role: 'system',
+            content: this.buildRagSystemPrompt(role, systemPrompt),
+          },
+          { role: 'user', content: userPrompt },
+        ]),
+        12000,
+        'AI syllabus summary timed out',
+      );
       const normalized = this.normalizeSummary(rawAnswer);
       const fallback = this.fallbackSummaryFromChunks(chunks);
 
@@ -587,6 +613,39 @@ ${context}`;
     const normalizedQuestion = question.toLowerCase();
 
     if (
+      /\b(final|finals|final exam|final examination)\b/i.test(
+        normalizedQuestion,
+      ) &&
+      /\b(week|hafta|kaçıncı|kacinci|which week|what week)\b/i.test(
+        normalizedQuestion,
+      )
+    ) {
+      return 'Final Exam Week is Week 16.';
+    }
+
+    if (/\boffice\s+hours?\b|\bofis\s+saat/i.test(normalizedQuestion)) {
+      return this.generateOfficeHoursAnswer(courseText);
+    }
+
+    const weekTopicAnswer = this.generateWeekTopicAnswer(
+      normalizedQuestion,
+      courseText,
+    );
+
+    if (weekTopicAnswer) {
+      return weekTopicAnswer;
+    }
+
+    if (
+      /\b(project|presentation|upload|submission)\b/i.test(normalizedQuestion) &&
+      /\b(due|deadline|when|date|week|submit|teslim)\b/i.test(
+        normalizedQuestion,
+      )
+    ) {
+      return this.generateProjectScheduleAnswer(courseText);
+    }
+
+    if (
       !/\b(grading|grade|grades|evaluation|assessment|weight|percentage)\b/i.test(
         normalizedQuestion,
       )
@@ -629,7 +688,116 @@ ${context}`;
       .join('\n');
   }
 
+  private generateOfficeHoursAnswer(courseText: string) {
+    const officeHours = this.extractInstructorOfficeHours(courseText);
+
+    if (!officeHours) {
+      return 'The uploaded syllabus does not list specific office hours.';
+    }
+
+    return `Office hours: ${officeHours}`;
+  }
+
+  private generateProjectScheduleAnswer(courseText: string) {
+    const projectWeeks = this.extractWeeklyTopics(courseText)
+      .filter((week) => Number.isInteger(Number(week.weekNo)))
+      .map((week) => ({
+        weekNo: Number(week.weekNo),
+        topic: this.cleanPdfText(week.topic || ''),
+        details: this.cleanPdfText(week.details || ''),
+        todo: this.cleanPdfText(week.todo || ''),
+      }))
+      .filter((week) =>
+        /\b(project|presentation|upload|submission|final version)\b/i.test(
+          [week.topic, week.details, week.todo].join(' '),
+        ),
+      )
+      .sort((first, second) => first.weekNo - second.weekNo);
+
+    if (!projectWeeks.length) {
+      return (
+        'The uploaded syllabus does not list an exact final project due date. ' +
+        'Please check the instructor announcements or manually published deadline details.'
+      );
+    }
+
+    const lines = projectWeeks.slice(0, 6).map((week) => {
+      const text = [week.topic, week.details, week.todo]
+        .filter(Boolean)
+        .join(' - ');
+
+      return `- Week ${week.weekNo}: ${text}`;
+    });
+
+    return [
+      'Based on the course calendar in the uploaded syllabus:',
+      ...lines,
+      'If the instructor has a separate exact submission date, follow the manually published deadline.',
+    ].join('\n');
+  }
+
+  private generateWeekTopicAnswer(
+    normalizedQuestion: string,
+    courseText: string,
+  ) {
+    const weekMatch = normalizedQuestion.match(
+      /\b(?:week|w)\s*(\d{1,2})\b|\b(\d{1,2})(?:st|nd|rd|th)?\s+week\b/i,
+    );
+
+    if (
+      !weekMatch ||
+      !/\b(topic|subject|covered|konu|week|hafta)\b/i.test(normalizedQuestion)
+    ) {
+      return null;
+    }
+
+    const weekNo = Number(weekMatch[1] || weekMatch[2]);
+
+    if (!Number.isInteger(weekNo) || weekNo < 1 || weekNo > 16) {
+      return null;
+    }
+
+    if (weekNo === 16) {
+      return 'Week 16 is Final Exam Week.';
+    }
+
+    const week = this.extractWeeklyTopics(courseText).find(
+      (item) => Number(item.weekNo) === weekNo,
+    );
+
+    if (!week || !this.isUsefulCalendarValue(week.topic)) {
+      return `I could not find a published topic for Week ${weekNo} in the uploaded syllabus.`;
+    }
+
+    const parts = [`Week ${weekNo} topic: ${this.cleanPdfText(week.topic)}`];
+    const todo = this.cleanPdfText(week.todo || '');
+    const details = this.cleanPdfText(week.details || '');
+
+    if (todo) parts.push(`To do: ${todo}`);
+    if (details) parts.push(`Assignment/deadline: ${details}`);
+
+    return parts.join('\n');
+  }
+
   private answerSourceBoost(question: string, content: string) {
+    if (/\boffice\s+hours?\b|\bofis\s+saat/i.test(question)) {
+      if (/\bOf\s*fice\s+Hours?\b|\bOffice\s+Hours?\b/i.test(content)) return 35;
+      if (/\boffice\b|\bappointment\b|\bMS Teams\b/i.test(content)) return 12;
+    }
+
+    if (/\b(?:week|w)\s*\d{1,2}\b/i.test(question)) {
+      if (/\b(course calendar|week\/place|course topic)\b/i.test(content)) return 35;
+      if (/\bW\d{1,2}\b|\bWeek\s+\d{1,2}\b/i.test(content)) return 15;
+    }
+
+    if (
+      /\b(project|presentation|upload|submission)\b/i.test(question) &&
+      /\b(due|deadline|when|date|week|submit)\b/i.test(question)
+    ) {
+      if (/\b(course calendar|week\/place|project presentation|project upload|final version)\b/i.test(content)) return 35;
+      if (/\b(project|presentation|upload|submission|deadline|due)\b/i.test(content)) return 15;
+    }
+
     if (
       !/\b(grading|grade|grades|evaluation|assessment|weight|percentage)\b/i.test(
         question,
@@ -645,7 +813,72 @@ ${context}`;
     return 0;
   }
 
-  private async generateRagAnswer(question: string, context: string) {
+  private async generateInstructorAdvice(
+    adviceType: InstructorAdviceType,
+    question: string,
+    fullCourseText: string,
+    retrievedContext: string,
+  ) {
+    const adviceInstructions: Record<InstructorAdviceType, string> = {
+      SYLLABUS_GAP_ANALYSIS:
+        'Find missing, weak, unclear, or incomplete syllabus areas. Focus on office hours, grading explanations, resources, deadlines, policies, and weekly schedule clarity. Do not flag office hours as missing or weak if the syllabus provides an instructor-defined method such as "posted on the office door", "by appointment", "contact the instructor", an email-based method, or a clear location/time. Only flag office hours if they are absent, blank, "Not published yet", "TBA", or "to be announced".',
+      GRADING_CONSISTENCY_CHECK:
+        'Check whether grading components, scores, descriptions, and weights are internally consistent. Verify whether percentages appear to total 100 and flag ambiguous or conflicting grading text.',
+      RESOURCE_RECOMMENDATION:
+        'Suggest optional textbooks, readings, videos, tools, or practice resources based on the course topics. Do not give generic categories such as "a beginner-friendly textbook" or "tool-specific tutorials". Recommend concrete resource names, authors/platforms when available, and explain which syllabus topic each item supports. Prioritize weekly course topics over prerequisites. Only recommend prerequisite resources if the syllabus explicitly shows that students need support for that background area. Limit the answer to 4 or 5 recommendations unless the instructor asks for more. If a resource is already listed in the syllabus, mention it as existing and do not duplicate it as a new recommendation. Every recommendation must be marked instructor-review-required.',
+      ANNOUNCEMENT_DRAFT_GENERATOR:
+        `Draft short announcement options for important syllabus events such as project uploads, quizzes, midterm weeks, final exam weeks, resource reminders, or policy reminders. Current academic week is Week ${CURRENT_ACADEMIC_WEEK}; prioritize events in Week ${CURRENT_ACADEMIC_WEEK} or later and mention each detected event week when available. Use specific events detected in the syllabus instead of generic "upcoming course activities" whenever possible. Keep each draft ready to copy, short, and instructor-review-required. If the final exam is discussed but no week is listed, use Week 16.`,
+    };
+
+    const systemPrompt =
+      'You are an instructor-facing syllabus advisor. Use only the provided course document context as the basis for analysis. ' +
+      'You may suggest improvements, optional resources, or announcement drafts, but you must not change official course rules or claim that suggestions are already approved. ' +
+      'Treat instructor-provided methods as valid even when they are not exact times, unless they are blank or explicitly unpublished. ' +
+      'Keep the answer concise and practical. Use clear headings and bullet points. ' +
+      'If the syllabus does not contain enough information for a requested item, say what is missing and what the instructor may add manually. ' +
+      'Every recommendation must be framed as instructor-review-required.';
+
+    const courseContext = this.preview(fullCourseText, 14000);
+    const retrieved = this.preview(retrievedContext, 4000);
+
+    try {
+      const answerTimeoutMs =
+        adviceType === 'RESOURCE_RECOMMENDATION' ? 25000 : 15000;
+      const answer = await this.withTimeout(
+        this.aiProvider.createAnswer([
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content:
+              `Instructor advice type:\n${adviceType}\n\n` +
+              `Advice instruction:\n${adviceInstructions[adviceType]}\n\n` +
+              `Current academic week:\nWeek ${CURRENT_ACADEMIC_WEEK}\n\n` +
+              `Instructor request:\n${question}\n\n` +
+              `Full course document context:\n${courseContext}\n\n` +
+              `Most relevant retrieved context:\n${retrieved}`,
+          },
+        ]),
+        answerTimeoutMs,
+        'AI instructor advice timed out',
+      );
+
+      return adviceType === 'SYLLABUS_GAP_ANALYSIS'
+        ? this.sanitizeGapAnalysisAnswer(answer, fullCourseText)
+        : answer;
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        return this.generateInstructorAdviceFallback(adviceType, fullCourseText);
+      }
+
+      throw error;
+    }
+  }
+
+  private async generateRagAnswer(
+    question: string,
+    context: string,
+    role: string,
+  ) {
     const systemPrompt =
       'You are a course assistant. Answer only from the provided course document context. ' +
       'If the context does not contain the answer, say that the uploaded course documents do not include enough information. ' +
@@ -655,23 +888,89 @@ ${context}`;
       'Do not say “it can be inferred” or “the syllabus does not mention” unless that is the entire answer.';
 
     try {
-      return await this.aiProvider.createAnswer([
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `Question:\n${question}\n\nCourse document context:\n${context}`,
-        },
-      ]);
+      return await this.withTimeout(
+        this.aiProvider.createAnswer([
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: `Question:\n${question}\n\nCourse document context:\n${context}`,
+          },
+        ]),
+        15000,
+        'AI answer timed out',
+      );
     } catch (error) {
       if (error instanceof ServiceUnavailableException) {
-        return (
-          'I found relevant source material, but the AI answer provider is not reachable. ' +
-          `Closest source context:\n${this.preview(context, 1200)}`
-        );
+        return this.generateExtractiveRagFallbackAnswer(question, context);
       }
 
       throw error;
     }
+  }
+
+  private generateExtractiveRagFallbackAnswer(question: string, context: string) {
+    const normalizedQuestion = question.toLowerCase();
+    const keywordGroups = [
+      normalizedQuestion.includes('project')
+        ? ['project', 'presentation', 'upload', 'deadline', 'due', 'final']
+        : [],
+      normalizedQuestion.includes('final')
+        ? ['final', 'exam', 'week 16', 'all chapters']
+        : [],
+      normalizedQuestion.includes('due') || normalizedQuestion.includes('deadline')
+        ? ['due', 'deadline', 'submission', 'upload']
+        : [],
+      normalizedQuestion.includes('when')
+        ? ['week', 'date', 'schedule']
+        : [],
+    ].flat();
+    const keywords = keywordGroups.length
+      ? Array.from(new Set(keywordGroups))
+      : normalizedQuestion
+          .split(/\W+/)
+          .filter((word) => word.length > 3)
+          .slice(0, 8);
+    const sentences = context
+      .replace(/\[Source[^\]]+\]/g, ' ')
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map((sentence) => this.cleanPdfText(sentence))
+      .filter((sentence) => sentence.length > 20)
+      .filter((sentence) =>
+        keywords.some((keyword) =>
+          sentence.toLowerCase().includes(keyword.toLowerCase()),
+        ),
+      )
+      .slice(0, 3);
+
+    if (sentences.length) {
+      return [
+        'I found relevant syllabus text, but the AI answer provider timed out. Based on the indexed document:',
+        ...sentences.map((sentence) => `- ${sentence}`),
+      ].join('\n');
+    }
+
+    return (
+      'I found relevant source material, but the AI answer provider timed out. ' +
+      `Closest source context:\n${this.preview(context, 900)}`
+    );
+  }
+
+  private buildRagSystemPrompt(role: string, basePrompt: string) {
+    if (role === 'INSTRUCTOR') {
+      return (
+        'You are an instructor course assistant for a syllabus management system. ' +
+        'Help the instructor inspect, verify, and explain their uploaded course documents. ' +
+        'You may point out where an item appears in the syllabus and suggest that the instructor manually edit unclear fields, but do not change official course rules yourself. ' +
+        basePrompt
+      );
+    }
+
+    return (
+      'You are a student course assistant. ' +
+      'Help an enrolled student understand their course syllabus, weekly topics, grading, office hours, deadlines, resources, and policies. ' +
+      'Use clear student-friendly wording and do not provide instructor-only recommendations or syllabus-editing advice. ' +
+      basePrompt
+    );
   }
 
   private buildSummaryContext(
@@ -1298,10 +1597,16 @@ ${context}`;
 
   private extractInstructorOfficeHours(text: string) {
     const match = text.match(
-      /\bOffice\s+Hours\s*:\s*:?\s*(.+?)(?=\s+CV\s*\(link\)|\s+Course Information\b)/i,
+      /\bOf\s*fice\s+Hours?\s*:\s*:?\s*(.+?)(?=\s+(?:CV\s*\(link\)|Course Information|Period|Time|Course Credit|Classroom)(?:\s*:|\b))/i,
     );
 
-    return this.preview(this.cleanPdfText(match?.[1] || ''), 180);
+    return this.preview(
+      this.cleanPdfText(match?.[1] || '').replace(
+        /\b(\d{1,2})\s+:\s*(\d{2})\b/g,
+        '$1:$2',
+      ),
+      180,
+    );
   }
 
   private extractPolicySection(
@@ -1309,7 +1614,9 @@ ${context}`;
     startLabel: string,
     endLabels: string[],
   ) {
-    const section = this.extractBetween(text, startLabel, endLabels);
+    const section =
+      this.extractPolicySectionByHeadings(text, startLabel) ||
+      this.extractBetween(text, startLabel, endLabels);
     const repeatedHeading = new RegExp(`${this.escapeRegExp(startLabel)}:\\s*`, 'i');
     const headingMatch = section.match(repeatedHeading);
     const cleanSection =
@@ -1320,15 +1627,136 @@ ${context}`;
     return this.cleanPolicyText(cleanSection);
   }
 
+  private extractPolicySectionByHeadings(text: string, startLabel: string) {
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    const headingPatterns: Array<{ key: string; pattern: RegExp }> = [
+      {
+        key: 'communication',
+        pattern: /\bCommunication\s+Channels\s+and\s+Methods\s*:/gi,
+      },
+      {
+        key: 'aiDigitalTools',
+        pattern: /\b(?:Usage\s+of\s+)?AI\s*&\s*Digital\s+Tools\s*:/gi,
+      },
+      {
+        key: 'deadlines',
+        pattern: /\b(?:Assignments?\s+and\s+Project\s+Deadline|D\s*eadline\s*s|Deadlines?)\s*:/gi,
+      },
+      {
+        key: 'attendance',
+        pattern: /\bAttendance\s*:/gi,
+      },
+      {
+        key: 'disabledStudentSupport',
+        pattern: /\bDisabled\s+Student\s+Support\s*:/gi,
+      },
+      {
+        key: 'communicationEthics',
+        pattern: /\bOral\s+and\s+Written\s+Communication\s+Ethics\s*:/gi,
+      },
+      {
+        key: 'privacyCopyright',
+        pattern: /\bPrivacy\s+and\s+Copyright\s*:/gi,
+      },
+      {
+        key: 'academicIntegrity',
+        pattern: /\bAcademic\s+Integrity(?:,\s*Cheating\s+and\s+Plagiarism)?\s*:?/gi,
+      },
+      {
+        key: 'courseResources',
+        pattern: /\bCourse\s+Resources\b/gi,
+      },
+      {
+        key: 'preparedBy',
+        pattern: /\bPrepared\s+by\b/gi,
+      },
+    ];
+    const requestedKey = this.policyKeyFromLabel(startLabel);
+
+    if (!requestedKey) {
+      return '';
+    }
+
+    const headings = headingPatterns.flatMap(({ key, pattern }) =>
+      Array.from(normalizedText.matchAll(pattern)).map((match) => ({
+        key,
+        index: match.index ?? 0,
+        length: match[0].length,
+      })),
+    );
+    const sortedHeadings = headings
+      .filter((heading) => heading.index >= 0)
+      .sort((a, b) => a.index - b.index);
+    const start = sortedHeadings.find((heading) => heading.key === requestedKey);
+
+    if (!start) {
+      return '';
+    }
+
+    const next = sortedHeadings.find(
+      (heading) =>
+        heading.index > start.index &&
+        heading.key !== requestedKey,
+    );
+    let section = normalizedText
+      .slice(start.index + start.length, next?.index ?? normalizedText.length)
+      .trim();
+
+    const sameHeading = headingPatterns.find(
+      (heading) => heading.key === requestedKey,
+    );
+
+    if (sameHeading) {
+      const repeated = Array.from(section.matchAll(sameHeading.pattern));
+      const lastRepeat = repeated.at(-1);
+
+      if (lastRepeat?.index !== undefined) {
+        section = section.slice(lastRepeat.index + lastRepeat[0].length).trim();
+      }
+    }
+
+    return section;
+  }
+
+  private policyKeyFromLabel(label: string) {
+    const normalized = label.toLowerCase().replace(/\s+/g, ' ').trim();
+
+    if (normalized.includes('communication channels')) return 'communication';
+    if (normalized.includes('ai') || normalized.includes('digital tools')) {
+      return 'aiDigitalTools';
+    }
+    if (normalized.includes('deadline')) return 'deadlines';
+    if (normalized.includes('attendance')) return 'attendance';
+    if (normalized.includes('disabled student')) return 'disabledStudentSupport';
+    if (normalized.includes('oral and written')) return 'communicationEthics';
+    if (normalized.includes('privacy') || normalized.includes('copyright')) {
+      return 'privacyCopyright';
+    }
+    if (normalized.includes('academic integrity')) return 'academicIntegrity';
+
+    return '';
+  }
+
   private cleanPolicyText(value: string) {
     const withLineBreaks = this.cleanPdfText(value)
+      .replace(/[•]\s*/g, '\n- ')
+      .replace(/[▪■□]/g, ' ')
       .replace(/\be-mail\b/gi, 'email')
       .replace(/\be\s*-\s*mail\b/gi, 'email')
       .replace(/\bMsTeams\b/g, 'MS Teams')
+      .replace(/\bMs Teams\b/g, 'MS Teams')
       .replace(/\bMat\s*erials\b/gi, 'Materials')
       .replace(/\bpa\s*rticipate\b/gi, 'participate')
       .replace(/\bdis\s*abilities\b/gi, 'disabilities')
       .replace(/\bcommunicatio\s+n\b/gi, 'communication')
+      .replace(/\bdi\s+sciplinary\b/gi, 'disciplinary')
+      .replace(/\bde\s+ceive\b/gi, 'deceive')
+      .replace(/\bNot\s+eve\s+rything\b/g, 'Not everything')
+      .replace(/\bwi\s+ll\b/gi, 'will')
+      .replace(/\bconduc\s+ted\b/gi, 'conducted')
+      .replace(/\bpen\s+alties\b/gi, 'penalties')
+      .replace(/\bAL\s+A\b/g, 'ALA')
+      .replace(/\bi\s+t\b/g, 'it')
       .replace(/\bad\s+dition\b/gi, 'addition')
       .replace(/\bplagiaris\s+m\b/gi, 'plagiarism')
       .replace(/\bproceedi\s+ngs\b/gi, 'proceedings')
@@ -1347,6 +1775,7 @@ ${context}`;
     const normalized = withLineBreaks
       .split('\n')
       .map((line) => line.replace(/\s+/g, ' ').trim())
+      .map((line) => line.replace(/\s+\d+\s*$/, '').trim())
       .filter(Boolean)
       .join('\n');
 
@@ -1530,6 +1959,9 @@ ${context}`;
       .replace(/\bsu\s+ch\b/gi, 'such')
       .replace(/\ban\s+d\b/gi, 'and')
       .replace(/\bar\s+e\b/gi, 'are')
+      .replace(/\bS\s+AP\b/g, 'SAP')
+      .replace(/\bwit\s+h\b/gi, 'with')
+      .replace(/\s+\)/g, ')')
       .replace(/\bh\s+ealthcare\b/gi, 'healthcare')
       .replace(/\s+-\s+/g, '-')
       .replace(/\s+/g, ' ')
@@ -1577,30 +2009,23 @@ ${context}`;
   }
 
   private extractGradingItems(text: string) {
-    const section = this.extractBetween(text, 'Grading and Evaluation', [
-      'TOTAL',
-      'Course Calendar',
-      'Course Policies',
-      'Course Resources',
-      'Matters Needing Attention',
-      'Academic Integrity',
-      'Prepared by',
-    ]);
+    const section = this.extractGradingSection(text);
 
     if (!section) {
       return [];
     }
 
     const knownAssignments =
-      'Coursera\\s+Application|Cousera\\s+Application|Final\\s+Exam|Midterm\\s+Exam|Project|Midterm|Final|Quiz|Homework|Assignment|Presentation|Participation|Lab|Exam';
+      'Active\\s+Learning\\s+Activities\\s*(?:\\(\\s*ALA\\s*\\))?|Industry\\s+Seminars?|Coursera\\s+Application|Cousera\\s+Application|Final\\s+Exam|Mid\\s*-?\\s*term\\s+exam|Midterm\\s+Exam|Project|Mid\\s*-?\\s*term|Midterm|Final|Quiz|Homework|Assignment|Presentation|Participation|Lab|Exam';
     const normalized = section
       .replace(/\bAssignment\s+Description\s+Scoring\s+Weight\s*\(%\)/i, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+    const assignmentBoundary = `(?:${knownAssignments})(?=\\s|:|\\(|-|$)`;
     const starredRows = Array.from(
       normalized.matchAll(
         new RegExp(
-          `\\*\\s*(${knownAssignments})\\b\\s*([\\s\\S]*?)(?=\\s+\\*\\s*(?:${knownAssignments})\\b|\\s*$)`,
+          `\\*\\s*(${assignmentBoundary})\\s*([\\s\\S]*?)(?=\\s+\\*\\s*${assignmentBoundary}|\\s*$)`,
           'gi',
         ),
       ),
@@ -1610,7 +2035,7 @@ ${context}`;
       : Array.from(
           normalized.matchAll(
             new RegExp(
-              `(?:^|\\s)(${knownAssignments})\\b\\s*([\\s\\S]*?)(?=\\s+(?:${knownAssignments})\\b|\\s*$)`,
+              `(?:^|\\s)(${assignmentBoundary})\\s*([\\s\\S]*?)(?=\\s+${assignmentBoundary}|\\s*$)`,
               'g',
             ),
           ),
@@ -1642,6 +2067,45 @@ ${context}`;
     return this.dedupeGradingItems(parsedRows);
   }
 
+  private extractGradingSection(text: string) {
+    const normalizedText = text.replace(/\s+/g, ' ').trim();
+    const starts = Array.from(
+      normalizedText.matchAll(/\bGrading\s+and\s+Evaluation\b/gi),
+    )
+      .map((match) => match.index ?? -1)
+      .filter((index) => index >= 0);
+
+    if (!starts.length) {
+      return this.extractBetween(text, 'Grading', [
+        'TOTAL',
+        'Course Calendar',
+        'Course Policies',
+        'Course Resources',
+        'Matters Needing Attention',
+        'Academic Integrity',
+        'Prepared by',
+      ]);
+    }
+
+    const start =
+      starts.find((index) =>
+        /Assignment\s+Description\s+Scoring\s+Weight/i.test(
+          normalizedText.slice(index, index + 1800),
+        ),
+      ) ?? starts[starts.length - 1];
+    const afterStart = normalizedText.slice(start);
+    const totalMatch = afterStart.match(/\bTOTAL\b\s*-?\s*\d/);
+    const nextSectionMatch = afterStart.match(
+      /\b(?:Course\s+Calendar|Make\s*-\s*up\s+Rules|Matters\s+Needing\s+Attention|Academic\s+Integrity|Prepared\s+by)\b/i,
+    );
+    const endIndex =
+      typeof totalMatch?.index === 'number'
+        ? totalMatch.index
+        : nextSectionMatch?.index;
+
+    return afterStart.slice(0, endIndex).trim();
+  }
+
   private extractTrailingScoreAndWeight(value: string) {
     const numericTail = value.match(
       /(\d+(?:\.\d+)?\s*%?(?:\s+\d+(?:\.\d+)?\s*%?){1,5})\s*$/,
@@ -1658,6 +2122,28 @@ ${context}`;
 
     if (numbers.length < 2) {
       return null;
+    }
+
+    const explicitTotalWeight = description.match(
+      /\bin\s+total\s+(\d+(?:\.\d+)?)\s*%/i,
+    );
+
+    if (explicitTotalWeight) {
+      return {
+        description,
+        scoring: numbers[0],
+        weight: `${explicitTotalWeight[1]}%`,
+      };
+    }
+
+    if (
+      numbers.length >= 4 &&
+      /^\d$/.test(numbers[numbers.length - 1]) &&
+      /^\d$/.test(numbers[numbers.length - 2]) &&
+      /^\d$/.test(numbers[numbers.length - 3]) &&
+      Number(numbers[numbers.length - 4]) >= 10
+    ) {
+      numbers = numbers.slice(0, -1);
     }
 
     if (
@@ -1701,6 +2187,9 @@ ${context}`;
   private normalizeGradingLabel(value: string) {
     return value
       .replace(/^\*+\s*/, '')
+      .replace(/\bMid\s*-\s*Term\b/gi, 'Midterm')
+      .replace(/\bMid\s*-\s*term\b/gi, 'Midterm')
+      .replace(/\s*\(\s*ALA\s*\)\s*/gi, ' (ALA)')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -1767,10 +2256,55 @@ ${context}`;
     );
     const extracted = afterStart.slice(0, endMatch?.index ?? undefined).trim();
 
-    return extracted
+    return this.cleanCourseObjectivesText(extracted);
+  }
+
+  private cleanCourseObjectivesText(value: string) {
+    const normalized = value
       .replace(/^[:\s-]+/, '')
-      .replace(/\s+/g, ' ')
+      .replace(/[▪■□]/g, ' ')
+      .replace(/[•]\s*/g, '\n')
+      .replace(/\bth\s+fectively\.\s*/gi, '')
+      .replace(/\s+([.,;:])/g, '$1')
       .trim();
+    const lines = normalized
+      .split(/\n+/)
+      .map((line) => this.cleanPdfText(line))
+      .map((line) =>
+        line.replace(
+          /\bThis course aims to provide students with\s+$/i,
+          '',
+        ),
+      )
+      .map((line) => line.trim())
+      .filter((line) => line.length > 20)
+      .filter(
+        (line) =>
+          !/^This course aims to provide students with User Experience\b/i.test(
+            line,
+          ),
+      );
+    const unique: string[] = [];
+
+    for (const line of lines) {
+      const isDuplicate = unique.some(
+        (existing) =>
+          existing.includes(line) ||
+          line.includes(existing) ||
+          this.normalizeForComparison(existing) ===
+            this.normalizeForComparison(line),
+      );
+
+      if (!isDuplicate) {
+        unique.push(line);
+      }
+    }
+
+    return unique.join('\n');
+  }
+
+  private normalizeForComparison(value: string) {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
   private extractPrerequisites(text: string) {
@@ -1795,7 +2329,9 @@ ${context}`;
   }
 
   private extractWeeklyTopics(text: string) {
-    const calendarText = this.extractCalendarSection(text);
+    const calendarText = this.normalizeCalendarOcrWeekMarkers(
+      this.extractCalendarSection(text),
+    );
     const lines = calendarText
       .split(/\n/)
       .map((line) => line.replace(/\s+/g, ' ').trim())
@@ -1841,14 +2377,21 @@ ${context}`;
       .filter((row) => row.weekNo >= 1 && row.weekNo <= 16)
       .map((row) => this.parseCalendarRow(row.weekNo, row.lines));
 
-    if (parsedRows.length >= 10) {
-      return this.ensureFinalExamWeek(parsedRows);
-    }
-
     const collapsedRows = this.extractCollapsedWeeklyTopics(calendarText);
 
     if (collapsedRows.length) {
-      return this.ensureFinalExamWeek(collapsedRows);
+      const parsedUniqueCount = new Set(parsedRows.map((row) => row.weekNo)).size;
+      const collapsedUniqueCount = new Set(
+        collapsedRows.map((row) => row.weekNo),
+      ).size;
+
+      if (collapsedUniqueCount >= parsedUniqueCount || parsedRows.length < 10) {
+        return this.ensureFinalExamWeek(this.dedupeWeeklyTopics(collapsedRows));
+      }
+    }
+
+    if (parsedRows.length >= 10) {
+      return this.ensureFinalExamWeek(this.dedupeWeeklyTopics(parsedRows));
     }
 
     const fallbackRows = Array.from(
@@ -1867,7 +2410,27 @@ ${context}`;
         todo: '',
       }));
 
-    return this.ensureFinalExamWeek(fallbackRows);
+    return this.ensureFinalExamWeek(this.dedupeWeeklyTopics(fallbackRows));
+  }
+
+  private dedupeWeeklyTopics(
+    weeks: CourseSyllabusSummary['weeklyTopics'],
+  ): CourseSyllabusSummary['weeklyTopics'] {
+    const byWeek = new Map<number, CourseSyllabusSummary['weeklyTopics'][number]>();
+
+    for (const week of weeks) {
+      const weekNo = Number(week.weekNo);
+
+      if (!Number.isInteger(weekNo)) {
+        continue;
+      }
+
+      byWeek.set(weekNo, { ...week, weekNo });
+    }
+
+    return Array.from(byWeek.values()).sort(
+      (a, b) => Number(a.weekNo) - Number(b.weekNo),
+    );
   }
 
   private ensureFinalExamWeek(
@@ -1891,7 +2454,9 @@ ${context}`;
   }
 
   private extractCollapsedWeeklyTopics(text: string) {
-    const normalized = text.replace(/\s+/g, ' ').trim();
+    const normalized = this.normalizeCalendarOcrWeekMarkers(text)
+      .replace(/\s+/g, ' ')
+      .trim();
     const markers = Array.from(
       normalized.matchAll(/(?:^|\s)(?:W|Week)\s*(\d{1,2})\b/gi),
     )
@@ -1915,25 +2480,44 @@ ${context}`;
     });
   }
 
+  private normalizeCalendarOcrWeekMarkers(text: string) {
+    return text.replace(/\b(W|Week)\s*1\s+([1-6])\b/gi, (_match, label, digit) => {
+      const normalizedLabel = /^week$/i.test(label) ? 'Week' : 'W';
+      return `${normalizedLabel}1${digit}`;
+    });
+  }
+
   private parseCollapsedCalendarRow(weekNo: number, segment: string) {
     const placeMatch = segment.match(/^(?:\d+\s+)?(f2f|online|hybrid)\b/i);
     const place = placeMatch ? this.normalizeCalendarPlace(placeMatch[1]) : '';
-    const withoutPlace = segment
-      .replace(/^\d+\s+/, '')
+    let withoutPlace = segment
       .replace(/^(f2f|online|hybrid)\b/i, '')
       .replace(/\b(matters\s+needing\s+attention|academic\s+integrity|course\s+policies|prepared\s+by)\b[\s\S]*$/i, '')
       .trim();
-    const assignmentMatch = withoutPlace.match(
+    const datePrefix = this.extractCalendarDatePrefix(withoutPlace);
+    withoutPlace = datePrefix.text;
+    const trailingDetailMatch = withoutPlace.match(
+      /\s((?:ALA|Seminar)\s*-\s*\d+(?:\s*\([^)]*\))?|FINAL\s+EXAM)(?:\s+\d+)?\s*$/i,
+    );
+    const trailingDetails = trailingDetailMatch?.[1] || '';
+    const withoutTrailingDetails = trailingDetailMatch?.index
+      ? withoutPlace.slice(0, trailingDetailMatch.index).trim()
+      : withoutPlace;
+    const assignmentMatch = withoutTrailingDetails.match(
       /\b(project\s+upload\s+#?\d*|assignments?\b|deadline\b|due\b)/i,
     );
     const beforeAssignment = assignmentMatch
-      ? withoutPlace.slice(0, assignmentMatch.index).trim()
-      : withoutPlace;
-    const details = assignmentMatch
-      ? withoutPlace.slice(assignmentMatch.index).trim()
+      ? withoutTrailingDetails.slice(0, assignmentMatch.index).trim()
+      : withoutTrailingDetails;
+    const assignmentDetails = assignmentMatch
+      ? withoutTrailingDetails.slice(assignmentMatch.index).trim()
       : '';
+    const details = [assignmentDetails, trailingDetails]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
     const todoMatch = beforeAssignment.match(
-      /\s(-\s*[A-Za-z]|Read the course notes|Review\b|Prepare\b)/i,
+      /\s(\*+\s*Review\b[\s\S]*|Read the course notes[\s\S]*|Review course materials[\s\S]*|Prepare\b[\s\S]*)/i,
     );
     const rawTopic = todoMatch
       ? beforeAssignment.slice(0, todoMatch.index).trim()
@@ -1944,18 +2528,41 @@ ${context}`;
     const topic = rawTopic.replace(/\s+/g, ' ').trim();
     const cleanedTopic = topic.replace(/\s+\d+\s*$/, '').trim();
     const todo = rawTodo
-      .replace(/\s*-\s*/g, '; ')
+      .replace(/\*+\s*/g, '; ')
       .replace(/^;\s*/, '')
       .replace(/\s+/g, ' ')
       .trim();
     const cleaned = this.cleanCalendarTopicAndTodo(cleanedTopic, todo);
+    const normalizedTopic = /^mid\s*-\s*term\s+week$/i.test(cleaned.topic)
+      ? 'Midterm Exam Week'
+      : cleaned.topic;
 
     return {
       weekNo,
-      place,
-      topic: cleaned.topic || 'Not published yet',
+      place: place || datePrefix.place,
+      topic: normalizedTopic || 'Not published yet',
       details,
       todo: cleaned.todo,
+    };
+  }
+
+  private extractCalendarDatePrefix(value: string) {
+    const monthPattern =
+      'Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec';
+    const match = value.match(
+      new RegExp(
+        `^(\\d{1,2}\\s+(?:${monthPattern}))\\s+(\\d{1,2}\\s+(?:${monthPattern}))\\s+([\\s\\S]+)$`,
+        'i',
+      ),
+    );
+
+    if (!match) {
+      return { place: '', text: value };
+    }
+
+    return {
+      place: `${this.cleanPdfText(match[1])} / ${this.cleanPdfText(match[2])}`,
+      text: match[3].trim(),
     };
   }
 
@@ -2030,12 +2637,22 @@ ${context}`;
   }
 
   private cleanCalendarTopicAndTodo(topic: string, todo: string) {
+    if (/^no\s+lecture\b/i.test(topic) || /^term\s+review\b/i.test(topic)) {
+      return {
+        topic: this.cleanPdfText(topic),
+        todo: this.cleanPdfText(todo),
+      };
+    }
+
     const inlineTodoMatch = topic.match(
       /^(.+?)(?:\s+-\s+|\s+)(Course\s+Schedule|Expectations|Review|Read\b|Prepare\b|Lecture\b|Lab\b|Practice\b)(.+)?$/i,
     );
 
     if (!inlineTodoMatch) {
-      return { topic, todo };
+      return {
+        topic: this.cleanPdfText(topic),
+        todo: this.cleanPdfText(todo),
+      };
     }
 
     const extractedTodo = [inlineTodoMatch[2], inlineTodoMatch[3] || '']
@@ -2046,8 +2663,8 @@ ${context}`;
       .trim();
 
     return {
-      topic: inlineTodoMatch[1].trim(),
-      todo: [todo, extractedTodo].filter(Boolean).join('; '),
+      topic: this.cleanPdfText(inlineTodoMatch[1].trim()),
+      todo: this.cleanPdfText([todo, extractedTodo].filter(Boolean).join('; ')),
     };
   }
 
@@ -2085,6 +2702,20 @@ ${context}`;
       {
         triggers: ['week', 'topic', 'schedule'],
         keywords: ['week', 'topic', 'schedule', 'lecture', 'module'],
+      },
+      {
+        triggers: ['project', 'deadline', 'due', 'submit', 'submission'],
+        keywords: [
+          'course calendar',
+          'project',
+          'presentation',
+          'upload',
+          'submission',
+          'deadline',
+          'due',
+          'final version',
+          'week',
+        ],
       },
       {
         triggers: ['resource', 'textbook', 'book', 'reading'],
@@ -2140,5 +2771,615 @@ ${context}`;
     return normalized.length > maxLength
       ? `${normalized.slice(0, maxLength).trim()}...`
       : normalized;
+  }
+
+  private withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        setTimeout(
+          () => reject(new ServiceUnavailableException(message)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  }
+
+  private generateInstructorAdviceFallback(
+    adviceType: InstructorAdviceType,
+    courseText: string,
+  ) {
+    if (adviceType === 'GRADING_CONSISTENCY_CHECK') {
+      return this.generateGradingFallback(courseText);
+    }
+
+    if (adviceType === 'RESOURCE_RECOMMENDATION') {
+      return this.generateResourceFallback(courseText);
+    }
+
+    if (adviceType === 'ANNOUNCEMENT_DRAFT_GENERATOR') {
+      return this.generateAnnouncementFallback(courseText);
+    }
+
+    return this.generateGapAnalysisFallback(courseText);
+  }
+
+  private generateGapAnalysisFallback(courseText: string) {
+    const issues: string[] = [];
+
+    if (!this.hasUsableOfficeHours(courseText)) {
+      issues.push(
+        'Office hours are weak or not specific. Add a clear day/time or explain where students can find the official schedule.',
+      );
+    }
+
+    const gradingItems = this.extractGradingItems(courseText);
+    const gradingTotal = this.getGradingWeightTotal(gradingItems);
+
+    if (!gradingItems.length) {
+      issues.push('Grading components were not clearly detected. Add a grading table with assignment, scoring, and weight columns.');
+    } else if (Math.abs(gradingTotal - 100) > 1) {
+      issues.push(`Detected grading weights total ${gradingTotal}%. Review the grading table so it clearly totals 100%.`);
+    }
+
+    const resources = this.extractCourseResources(courseText, []);
+    if (!resources.length) {
+      issues.push('Course resources are missing or unclear. Add required and optional materials separately.');
+    }
+
+    if (!/\b(W\d+|Week\s+\d+)\b/i.test(courseText)) {
+      issues.push('Weekly course calendar was not clearly detected. Add week-by-week topics and deadlines.');
+    }
+
+    if (!/\b(deadline|project upload|quiz|midterm|final exam)\b/i.test(courseText)) {
+      issues.push('Important assessment dates are not clear. Add quiz, project upload, midterm, or final exam week information if applicable.');
+    }
+
+    const finalIssues = issues.length
+      ? issues
+      : ['No major syllabus gaps were detected from the indexed PDF text. Instructor review is still recommended before publishing.'];
+
+    return [
+      'Syllabus Gap Analysis',
+      'Instructor review required before publishing changes.',
+      '',
+      ...finalIssues.map((issue) => `- ${issue}`),
+    ].join('\n');
+  }
+
+  private sanitizeGapAnalysisAnswer(answer: string, courseText: string) {
+    if (!this.hasUsableOfficeHours(courseText)) {
+      return answer;
+    }
+
+    const lines = answer.split('\n');
+    const filteredLines = lines.filter(
+      (line) =>
+        !(
+          /office\s+hours?/i.test(line) &&
+          /\b(weak|missing|unclear|not specific|not published|tba|to be announced)\b/i.test(
+            line,
+          )
+        ),
+    );
+    const hasIssueLine = filteredLines.some((line) => /^\s*-\s+/.test(line));
+
+    if (hasIssueLine) {
+      return filteredLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    return [
+      'Syllabus Gap Analysis',
+      'Instructor review required before publishing changes.',
+      '',
+      '- No major syllabus gaps were detected from the indexed PDF text. Instructor review is still recommended before publishing.',
+    ].join('\n');
+  }
+
+  private hasUsableOfficeHours(courseText: string) {
+    const officeHours = this.extractInstructorOfficeHours(courseText);
+
+    return Boolean(
+      officeHours &&
+        !/not published|tba|to be announced/i.test(officeHours) &&
+        /\b(posted|door|appointment|contact|email|online|office|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\s*[:.]\s*\d{2})\b/i.test(
+          officeHours,
+        ),
+    );
+  }
+
+  private generateGradingFallback(courseText: string) {
+    const gradingItems = this.extractGradingItems(courseText);
+
+    if (!gradingItems.length) {
+      return [
+        'Grading Consistency Check',
+        'Instructor review required.',
+        '',
+        '- I could not detect a clear grading table from the indexed syllabus text.',
+        '- Add grading components with assignment name, description, scoring, and weight (%).',
+      ].join('\n');
+    }
+
+    const total = this.getGradingWeightTotal(gradingItems);
+    const rows = gradingItems.map((item) => {
+      const parts = item.description.split('|').map((part) => part.trim());
+      const scoring = parts[1] || 'scoring not clear';
+      return `- ${item.label}: ${item.value} (${scoring} points)`;
+    });
+
+    return [
+      'Grading Consistency Check',
+      'Instructor review required.',
+      '',
+      ...rows,
+      `- Detected total weight: ${total}%.`,
+      Math.abs(total - 100) <= 1
+        ? '- The detected grading weights appear to total 100%.'
+        : '- The detected grading weights do not clearly total 100%; review the PDF table and extracted values.',
+    ].join('\n');
+  }
+
+  private generateResourceFallback(courseText: string) {
+    const existingResources = this.extractCourseResources(courseText, []);
+    const topics = this.extractFallbackTopics(courseText);
+    const topicText = topics.length ? topics.slice(0, 4).join(', ') : 'the weekly course topics';
+    const recommendations = this.generateConcreteResourceRecommendations(
+      courseText,
+      topics,
+      existingResources,
+    );
+
+    return [
+      'Optional Resource Recommendations',
+      'Instructor review required before adding any item to the syllabus.',
+      'AI-generated concrete resource selection was not available, so no course-specific external resource names were auto-invented.',
+      '',
+      existingResources.length
+        ? `Detected existing resources: ${existingResources.slice(0, 3).join('; ')}`
+        : 'No clearly separated course resources were detected.',
+      '',
+      `Based on ${topicText}, optional additions could include:`,
+      ...recommendations,
+    ].join('\n');
+  }
+
+  private generateConcreteResourceRecommendations(
+    courseText: string,
+    topics: string[],
+    existingResources: string[],
+  ) {
+    return this.generateTopicBasedResourceSlots(topics);
+
+    const haystack = `${topics.join(' ')} ${courseText}`.toLowerCase();
+    const existing = existingResources.join(' ').toLowerCase();
+    const recommendations: string[] = [];
+
+    const addRecommendation = (
+      name: string,
+      supports: string,
+      reason: string,
+      duplicateHints: string[] = [name],
+    ) => {
+      if (
+        duplicateHints.some((hint) =>
+          existing.includes(hint.toLowerCase().slice(0, 40)),
+        )
+      ) {
+        return;
+      }
+
+      recommendations.push(
+        `- instructor-review-required: ${name} — supports ${supports}. ${reason}`,
+      );
+    };
+
+    const isGraphicsCourse =
+      /\b(computer graphics|graphics programming|animation|processing|coordinate systems?|2d|3d|geometric transformation|visual programming|java technologies)\b/i.test(
+        haystack,
+      );
+    const isDataScienceCourse =
+      !isGraphicsCourse &&
+      /\b(rstudio|r programming|programming in r|data science|ggplot|eda|sql|regression|data frames?|tidyverse|dplyr|tidyr|hypothesis testing|data visualization)\b/i.test(
+        haystack,
+      );
+
+    if (isGraphicsCourse) {
+      addRecommendation(
+        'Computer Graphics: Principles and Practice by John F. Hughes, Andries van Dam, Morgan McGuire, David Sklar, James D. Foley, Steven Feiner, and Kurt Akeley',
+        'computer graphics fundamentals, coordinate systems, transformations, and rendering concepts',
+        'Useful as an optional deeper reference for students who want a broader theory background.',
+        ['Computer Graphics: Principles and Practice'],
+      );
+      addRecommendation(
+        'LearnOpenGL by Joey de Vries',
+        'coordinate systems, transformations, rendering pipeline concepts, and graphics programming practice',
+        'Can support optional visual examples even if the official course implementation uses another graphics environment.',
+        ['LearnOpenGL'],
+      );
+      addRecommendation(
+        'The Nature of Code by Daniel Shiffman',
+        'animation, interaction, motion, and creative coding concepts',
+        'Fits optional enrichment for students building graphics or animation projects.',
+        ['The Nature of Code'],
+      );
+      addRecommendation(
+        'Processing Reference documentation',
+        'Processing syntax, drawing functions, interaction, images, and animation APIs',
+        'A practical quick reference aligned with the existing Processing textbooks.',
+        ['Processing Reference'],
+      );
+      addRecommendation(
+        'Khan Academy Linear Algebra',
+        'vectors, matrices, transformations, and geometry prerequisites used in graphics topics',
+        'Helpful only as optional background support for students who need math review.',
+        ['Khan Academy Linear Algebra'],
+      );
+    }
+
+    if (isDataScienceCourse) {
+      addRecommendation(
+        'Hands-On Programming with R by Garrett Grolemund',
+        'R syntax, functions, control structures, and basic programming practice',
+        'Useful for students who need extra R background before weekly data tasks.',
+      );
+      addRecommendation(
+        'ggplot2: Elegant Graphics for Data Analysis by Hadley Wickham',
+        'data visualization and ggplot2 weeks',
+        'A focused optional reference for visualization assignments and examples.',
+        ['ggplot2', 'Elegant Graphics'],
+      );
+      addRecommendation(
+        'SQLBolt interactive SQL lessons',
+        'SQL querying and database-related weekly topics',
+        'Provides short browser-based exercises that can support optional practice.',
+      );
+      addRecommendation(
+        'OpenIntro Statistics',
+        'descriptive statistics, hypothesis testing, and regression topics',
+        'Can help students review statistics concepts used in data analysis weeks.',
+      );
+      addRecommendation(
+        'Posit Cheatsheets for RStudio, dplyr, tidyr, and ggplot2',
+        'RStudio workflow, data cleaning, and tidyverse usage',
+        'Good as quick optional references during labs or project work.',
+        ['Posit Cheatsheets', 'RStudio Cheatsheets'],
+      );
+    }
+
+    if (/\b(erp|sap|business process|process reengineering|operations management|bpmn)\b/i.test(haystack)) {
+      addRecommendation(
+        'SAP Learning Journey: Business Process Integration',
+        'ERP and SAP business process integration topics',
+        'Official SAP learning material can reinforce platform-specific course concepts.',
+        ['SAP Learning Journey'],
+      );
+      addRecommendation(
+        'APQC Process Classification Framework',
+        'business process analysis and redesign topics',
+        'Provides a structured reference for comparing and improving business processes.',
+        ['APQC'],
+      );
+      addRecommendation(
+        'Camunda BPMN 2.0 Tutorial',
+        'business process modeling and workflow representation',
+        'Useful if the instructor wants optional process modeling practice.',
+        ['Camunda', 'BPMN'],
+      );
+    }
+
+    if (
+      !isGraphicsCourse &&
+      /\b(data structures|algorithm|programming|object oriented|java|python)\b/i.test(
+        haystack,
+      )
+    ) {
+      addRecommendation(
+        'OpenDSA Data Structures and Algorithms',
+        'data structures, algorithms, and programming practice',
+        'Offers interactive exercises that can support optional weekly review.',
+        ['OpenDSA'],
+      );
+      addRecommendation(
+        'Visualgo',
+        'algorithm visualization and data structure behavior',
+        'Can help students inspect sorting, graph, tree, and heap operations visually.',
+        ['Visualgo'],
+      );
+    }
+
+    if (recommendations.length) {
+      return recommendations.slice(0, 5);
+    }
+
+    return [
+      '- instructor-review-required: MIT OpenCourseWare topic-related lecture notes — supports the main course concepts detected in the weekly schedule. Use only the specific pages that match the instructor-approved syllabus topics.',
+      '- instructor-review-required: OpenStax topic-related chapters — supports prerequisite or background review. Select chapters manually after checking alignment with the official syllabus.',
+      '- instructor-review-required: Official documentation for the course software tools — supports tool usage mentioned in the syllabus. Add only the relevant documentation pages after instructor review.',
+    ];
+  }
+
+  private generateTopicBasedResourceSlots(topics: string[]) {
+    const topicRecommendations = topics
+      .slice(0, 5)
+      .map(
+        (topic) =>
+          `- instructor-review-required: Select one instructor-approved optional book, article, official documentation page, or practice resource for "${topic}". Add the exact title/link only after instructor review.`,
+      );
+
+    if (topicRecommendations.length) {
+      return topicRecommendations;
+    }
+
+    return [
+      '- instructor-review-required: Select one instructor-approved optional textbook or article aligned with the main weekly topics. Add the exact title/link only after instructor review.',
+      '- instructor-review-required: Select official documentation for any software, platform, or tool explicitly used in the syllabus. Add only the relevant pages after instructor review.',
+      '- instructor-review-required: Select optional practice material for students who need background support. Confirm alignment with the syllabus before publishing.',
+    ];
+  }
+
+  private generateAnnouncementFallback(courseText: string) {
+    const eventHints = this.sortAnnouncementEventHints(
+      this.extractFallbackEventHints(courseText),
+    );
+    const eventText = eventHints.length
+      ? eventHints.slice(0, 4).join(', ')
+      : `upcoming course activities from Week ${CURRENT_ACADEMIC_WEEK} onward`;
+    const drafts = this.generateAnnouncementDraftLines(eventHints, courseText);
+
+    return [
+      'Announcement Drafts',
+      'Instructor review required before publishing.',
+      '',
+      `Detected event focus: ${eventText}.`,
+      '',
+      ...drafts,
+    ].join('\n');
+  }
+
+  private getGradingWeightTotal(
+    gradingItems: Array<{ value: string; description: string; label: string }>,
+  ) {
+    return gradingItems.reduce((total, item) => {
+      const value = Number(item.value.match(/\d+(?:\.\d+)?/)?.[0] ?? 0);
+      return total + (Number.isFinite(value) ? value : 0);
+    }, 0);
+  }
+
+  private extractFallbackTopics(courseText: string) {
+    const matches = Array.from(
+      courseText.matchAll(/\bW\d+\s+(?:F2F|ONLINE|Hybrid)?\s*([^W]{8,90})/gi),
+    )
+      .map((match) => this.cleanPdfText(match[1]))
+      .filter((topic) => topic.length >= 8);
+
+    return Array.from(new Set(matches)).slice(0, 8);
+  }
+
+  private extractFallbackEventHints(courseText: string) {
+    const normalized = this.cleanPdfText(courseText);
+    const hints: string[] = this.extractCalendarEventHints(courseText);
+
+    const add = (hint: string) => {
+      if (!hints.includes(hint)) hints.push(hint);
+    };
+
+    if (/\bquiz(?:zes)?\b/i.test(normalized) && !hints.some((hint) => /quiz/i.test(hint))) {
+      add('Quiz');
+    }
+    if (/\bmidterm(?:\s+exam)?\b/i.test(normalized) && !hints.some((hint) => /midterm/i.test(hint))) {
+      add(`Midterm Exam${this.extractEventWeek(normalized, /midterm/i)}`);
+    }
+    if (/\bfinal(?:\s+exam)?\b/i.test(normalized) && !hints.some((hint) => /final/i.test(hint))) {
+      add('Week 16: Final Exam');
+    }
+    if (
+      /\bproject\s+upload\b|\buploads?\s+throughout\b|\bmake\s+\d+\s+uploads?\b/i.test(normalized) &&
+      !hints.some((hint) => /project upload/i.test(hint))
+    ) {
+      add('Project Upload');
+    }
+    if (
+      /\bproject\s+presentation(?:s)?\b/i.test(normalized) &&
+      !hints.some((hint) => /project presentation/i.test(hint))
+    ) {
+      add('Project Presentation');
+    }
+    if (/\bcoursera|cousera\b/i.test(normalized)) {
+      add('Coursera Application');
+    }
+    if (/\bread\s+the\s+course\s+notes\b|\bcourse\s+resources\b|\btextbook\b/i.test(normalized)) {
+      add('Course Resources Reminder');
+    }
+
+    return hints;
+  }
+
+  private extractCalendarEventHints(courseText: string) {
+    const weeks = this.extractWeeklyTopics(courseText)
+      .filter((week) => Number.isInteger(Number(week.weekNo)))
+      .map((week) => ({
+        weekNo: Number(week.weekNo),
+        text: this.cleanPdfText(
+          [week.topic, week.details, week.todo].filter(Boolean).join(' '),
+        ),
+      }))
+      .filter((week) => week.weekNo >= CURRENT_ACADEMIC_WEEK);
+    const hints: string[] = [];
+    const add = (hint: string) => {
+      if (!hints.includes(hint)) hints.push(hint);
+    };
+
+    for (const week of weeks) {
+      if (/\bquiz(?:zes)?\b/i.test(week.text)) {
+        add(`Week ${week.weekNo}: Quiz`);
+      }
+      if (/\bmidterm(?:\s+exam)?\b/i.test(week.text)) {
+        add(`Week ${week.weekNo}: Midterm Exam`);
+      }
+      if (/\bfinal(?:\s+exam)?\b/i.test(week.text)) {
+        add(`Week ${week.weekNo}: Final Exam`);
+      }
+      if (/\bproject\s+upload\b|\bupload\s*#?\d+\b|\bsubmission\b/i.test(week.text)) {
+        add(`Week ${week.weekNo}: Project Upload`);
+      }
+      if (/\bproject\s+presentation(?:s)?\b|\bpresentations?\b/i.test(week.text)) {
+        add(`Week ${week.weekNo}: Project Presentation`);
+      }
+      if (/\bcoursera|cousera\b/i.test(week.text)) {
+        add(`Week ${week.weekNo}: Coursera Application`);
+      }
+    }
+
+    if (
+      !hints.some((hint) => /final/i.test(hint)) &&
+      /\bfinal(?:\s+exam)?\b/i.test(this.cleanPdfText(courseText))
+    ) {
+      add('Week 16: Final Exam');
+    }
+
+    return hints;
+  }
+
+  private extractEventWeek(text: string, eventPattern: RegExp) {
+    const weekRows = Array.from(
+      text.matchAll(/\bW(?:eek)?\s*(\d{1,2})\b[\s\S]{0,180}?/gi),
+    );
+
+    for (const row of weekRows) {
+      const rowText = row[0];
+      if (eventPattern.test(rowText)) {
+        return ` Week ${row[1]}`;
+      }
+    }
+
+    return '';
+  }
+
+  private generateAnnouncementDraftLines(
+    eventHints: string[],
+    courseText: string,
+  ) {
+    const sortedHints = this.sortAnnouncementEventHints(eventHints);
+    const projectPresentationHints = sortedHints.filter((hint) =>
+      /project presentation/i.test(hint),
+    );
+    const groupedProjectPresentation = this.groupAnnouncementWeeks(
+      projectPresentationHints,
+      'Project Presentation',
+    );
+    const draftItems: Array<{ week: number; line: string }> = [];
+    const addDraft = (hint: string, line: string) => {
+      draftItems.push({
+        week: this.getAnnouncementHintWeek(hint),
+        line: `- instructor-review-required: ${line}`,
+      });
+    };
+
+    if (groupedProjectPresentation) {
+      addDraft(
+        groupedProjectPresentation,
+        `${groupedProjectPresentation} reminder: Please prepare your presentation materials and check the syllabus expectations before presentation week.`,
+      );
+    }
+
+    for (const hint of sortedHints) {
+      if (/project presentation/i.test(hint)) {
+        continue;
+      }
+
+      if (/project upload/i.test(hint)) {
+        addDraft(
+          hint,
+          `${hint} reminder: Please review the project upload requirements in the syllabus and submit the required file before the instructor-defined deadline.`,
+        );
+      } else if (/quiz/i.test(hint)) {
+        addDraft(
+          hint,
+          `${hint} reminder: Please review the related weekly topics and course notes before the upcoming quiz.`,
+        );
+      } else if (/midterm/i.test(hint)) {
+        addDraft(
+          hint,
+          `${hint} reminder: Please review the covered course topics and any instructor-provided exam guidance before the midterm.`,
+        );
+      } else if (/final/i.test(hint)) {
+        addDraft(
+          hint,
+          `${hint} reminder: Please review all relevant chapters, course notes, and instructor-approved materials before the final exam.`,
+        );
+      } else if (/coursera|cousera/i.test(hint)) {
+        addDraft(
+          hint,
+          `${hint} reminder: Please follow the syllabus instructions for the Coursera-related activity and complete the required work before the deadline.`,
+        );
+      } else if (/resources/i.test(hint)) {
+        addDraft(
+          hint,
+          'Resource reminder: Please use the official course materials and any instructor-approved optional resources while preparing for weekly topics.',
+        );
+      }
+    }
+
+    if (draftItems.length) {
+      return draftItems
+        .sort((first, second) => first.week - second.week)
+        .map((item) => item.line)
+        .slice(0, 5);
+    }
+
+    const topics = this.extractFallbackTopics(courseText).slice(0, 2);
+    return [
+      topics.length
+        ? `- instructor-review-required: Weekly preparation reminder: Please review ${topics.join(' and ')} before the next class.`
+        : '- instructor-review-required: Weekly preparation reminder: Please review the upcoming course schedule and prepare the required materials before class.',
+      '- instructor-review-required: Syllabus reminder: Please check the official syllabus for assessment rules, weekly expectations, and approved course resources.',
+    ];
+  }
+
+  private sortAnnouncementEventHints(eventHints: string[]) {
+    return [...eventHints].sort(
+      (first, second) =>
+        this.getAnnouncementHintWeek(first) - this.getAnnouncementHintWeek(second),
+    );
+  }
+
+  private getAnnouncementHintWeek(hint: string) {
+    const match = hint.match(/Week\s+(\d{1,2})/i);
+    if (!match) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    return Number(match[1]);
+  }
+
+  private groupAnnouncementWeeks(hints: string[], label: string) {
+    const weeks = hints
+      .map((hint) => this.getAnnouncementHintWeek(hint))
+      .filter((week) => Number.isInteger(week) && week !== Number.MAX_SAFE_INTEGER)
+      .sort((first, second) => first - second);
+
+    if (!weeks.length) {
+      return hints.length ? label : '';
+    }
+
+    const uniqueWeeks = Array.from(new Set(weeks));
+    const isConsecutive = uniqueWeeks.every(
+      (week, index) => index === 0 || week === uniqueWeeks[index - 1] + 1,
+    );
+
+    if (uniqueWeeks.length === 1) {
+      return `Week ${uniqueWeeks[0]}: ${label}`;
+    }
+
+    if (isConsecutive) {
+      return `Weeks ${uniqueWeeks[0]}-${uniqueWeeks[uniqueWeeks.length - 1]}: ${label}`;
+    }
+
+    return `Weeks ${uniqueWeeks.join(', ')}: ${label}`;
   }
 }

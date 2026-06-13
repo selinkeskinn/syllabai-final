@@ -468,6 +468,19 @@ const getGradingWeightTotal = (
     return sum + extractPercentValue(weight);
   }, 0);
 
+const hasMissingAiGradingComponent = (
+  manualRows: Array<{ id: string; label: string; value: string }>,
+  aiRows: Array<{ id: string; label: string; value: string }>
+) => {
+  if (manualRows.length === 0 || aiRows.length === 0) return false;
+
+  const manualLabels = new Set(
+    manualRows.map((row) => row.label.toLowerCase().trim())
+  );
+
+  return aiRows.some((row) => !manualLabels.has(row.label.toLowerCase().trim()));
+};
+
 const repairFinalExamWeight = <
   T extends { id: string; label: string; value: string },
 >(
@@ -910,7 +923,8 @@ export default function InstructorCourseDetailPage() {
     aiGradingTotal <= 105 &&
     (manualGradingRows.length === 0 ||
       manualGradingTotal < 95 ||
-      manualGradingTotal > 105);
+      manualGradingTotal > 105 ||
+      hasMissingAiGradingComponent(manualGradingRows, aiGradingRows));
   const rawGradingRows =
     shouldUseAiGrading || manualGradingRows.length === 0
       ? aiGradingRows
@@ -1361,11 +1375,20 @@ export default function InstructorCourseDetailPage() {
     }
   };
 
-  const splitSummaryText = (value?: string | null) =>
-    value
-      ?.split(/\n|(?<=\.)\s+(?=[A-Z])/)
+  const splitSummaryText = (value?: string | null) => {
+    if (!value) return [];
+
+    const normalized = value
+      .replace(/[▪■□]/g, " ")
+      .replace(/[•]\s*/g, "\n")
+      .trim();
+    const hasBulletLines = /\n/.test(normalized);
+
+    return normalized
+      .split(hasBulletLines ? /\n+/ : /(?<=\.)\s+(?=[A-Z])/)
       .map((line) => line.trim())
-      .filter(Boolean) ?? [];
+      .filter(Boolean);
+  };
   const getSummaryParagraphs = (value: string | undefined, fallback: string[]) => {
     const extracted = splitSummaryText(value);
     return extracted.length ? extracted : fallback;
@@ -1596,7 +1619,7 @@ export default function InstructorCourseDetailPage() {
 
   const courseObjectiveItems = splitSummaryText(displayedCourseInfo.courseObjectives)
     .length
-    ? splitSummaryText(displayedCourseInfo.courseObjectives).slice(0, 5)
+    ? splitSummaryText(displayedCourseInfo.courseObjectives)
     : [
         "Course objectives are defined by the instructor and official syllabus.",
       ];

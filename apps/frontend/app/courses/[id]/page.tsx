@@ -429,6 +429,19 @@ const getGradingWeightTotal = (rows: Array<{ label: string; value: string }>) =>
     return sum + extractPercentValue(weight);
   }, 0);
 
+const hasMissingAiGradingComponent = (
+  manualRows: Array<{ label: string; value: string }>,
+  aiRows: Array<{ label: string; value: string }>
+) => {
+  if (manualRows.length === 0 || aiRows.length === 0) return false;
+
+  const manualLabels = new Set(
+    manualRows.map((row) => row.label.toLowerCase().trim())
+  );
+
+  return aiRows.some((row) => !manualLabels.has(row.label.toLowerCase().trim()));
+};
+
 const repairFinalExamWeight = <T extends { label: string; value: string }>(
   rows: T[]
 ) => {
@@ -706,11 +719,20 @@ export default function CourseDetailPage() {
   });
 
   const resolvedSyllabus = syllabus ?? course?.syllabus ?? null;
-  const splitSummaryText = (value?: string | null) =>
-    value
-      ?.split(/\n|(?<=\.)\s+(?=[A-Z])/)
+  const splitSummaryText = (value?: string | null) => {
+    if (!value) return [];
+
+    const normalized = value
+      .replace(/[▪■□]/g, " ")
+      .replace(/[•]\s*/g, "\n")
+      .trim();
+    const hasBulletLines = /\n/.test(normalized);
+
+    return normalized
+      .split(hasBulletLines ? /\n+/ : /(?<=\.)\s+(?=[A-Z])/)
       .map((line) => line.trim())
-      .filter(Boolean) ?? [];
+      .filter(Boolean);
+  };
   const aiInstructorInfo = aiSummary?.instructorInfo;
   const aiCourseInfo = aiSummary?.courseInfo;
   const aiPolicySections = aiSummary?.policySections;
@@ -857,7 +879,8 @@ export default function CourseDetailPage() {
     aiGradingTotal <= 105 &&
     (manualGradingRows.length === 0 ||
       manualGradingTotal < 95 ||
-      manualGradingTotal > 105);
+      manualGradingTotal > 105 ||
+      hasMissingAiGradingComponent(manualGradingRows, aiGradingRows));
   const rawGradingRows =
     shouldUseAiGrading || manualGradingRows.length === 0
       ? aiGradingRows

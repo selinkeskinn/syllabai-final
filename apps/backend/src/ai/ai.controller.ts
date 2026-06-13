@@ -42,6 +42,7 @@ export class AiController {
       req.user.role,
       courseId,
       dto.question,
+      dto.adviceType,
     );
   }
 
