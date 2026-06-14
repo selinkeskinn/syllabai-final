@@ -2192,15 +2192,15 @@ export default function InstructorCourseDetailPage() {
 
               <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
                 <Link
-                  href={`/instructor/courses/${course.id}/syllabus/new`}
+                  href={`/instructor/courses/${course.id}/syllabus/edit`}
                   className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-5 py-4 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      Upload / Update Syllabus
+                      Manage PDFs
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Extract grading, policies and weeks
+                      Upload course documents
                     </p>
                   </div>
                   <FileText className="h-5 w-5 text-blue-600" />
