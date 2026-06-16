@@ -15,6 +15,7 @@ import {
   Filter,
   Trash2,
   X,
+  Plus,
 } from "lucide-react";
 
 type AnnouncementFilter = "all" | "urgent" | "events" | "info";
@@ -351,6 +352,23 @@ export default function InstructorAnnouncementsPage() {
             </div>
 
             <div className="relative flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingAnnouncement(null);
+                  setForm({
+                    courseId: "",
+                    title: "",
+                    type: "INFO",
+                    content: "",
+                  });
+                  setShowAnnouncementModal(true);
+                }}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+              >
+                <Plus className="h-4 w-4" />
+                New Announcement
+              </button>
 
               <button
                 type="button"
