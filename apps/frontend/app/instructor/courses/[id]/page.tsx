@@ -1389,6 +1389,30 @@ export default function InstructorCourseDetailPage() {
       .map((line) => line.trim())
       .filter(Boolean);
   };
+  const cleanExtractedDisplayText = (value?: string | null) =>
+    (value || "")
+      .replace(/[â–ªâ– â–¡☐☑☒✓✔]/g, " ")
+      .replace(/[ï‚·â€¢]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const normalizeOutcomeItems = (items: string[]) => {
+    const verbs =
+      "Describe|Define|Explain|Apply|Analyze|Evaluate|Understand|Develop|Use|Import|Prepare|Query|Visualize";
+
+    return items
+      .flatMap((item) => {
+        const cleaned = cleanExtractedDisplayText(item)
+          .replace(/^The students who have succeeded in this course;\s*/i, "")
+          .trim();
+        const parts = cleaned
+          .split(new RegExp(`\\s+(?=${verbs}\\b)`, "g"))
+          .map((part) => part.trim())
+          .filter((part) => part.length > 15);
+
+        return parts.length > 1 ? parts : [cleaned];
+      })
+      .filter(Boolean);
+  };
   const getSummaryParagraphs = (value: string | undefined, fallback: string[]) => {
     const extracted = splitSummaryText(value);
     return extracted.length ? extracted : fallback;
@@ -1580,7 +1604,7 @@ export default function InstructorCourseDetailPage() {
   }[activePolicy.noteTone];
 
   const moreInfoLearningOutcomes = displayedMoreInfo.learningOutcomes.length
-    ? displayedMoreInfo.learningOutcomes
+    ? normalizeOutcomeItems(displayedMoreInfo.learningOutcomes)
     : syllabusDescription
       ? splitSummaryText(syllabusDescription)
       : [
@@ -1591,10 +1615,9 @@ export default function InstructorCourseDetailPage() {
         course?.description ||
           "Demonstrate understanding of the course objectives and assessment structure.",
       ];
-  const moreInfoLearningOutcomesText = moreInfoLearningOutcomes.join(" ");
 
   const courseStructureDescription =
-    displayedMoreInfo.courseStructure ||
+    cleanExtractedDisplayText(displayedMoreInfo.courseStructure) ||
     "This course employs a variety of teaching and learning methods to ensure comprehensive understanding and practical application of course concepts.";
   const courseStructureItems = displayedMoreInfo.teachingMethods.length
     ? displayedMoreInfo.teachingMethods
@@ -3434,9 +3457,13 @@ export default function InstructorCourseDetailPage() {
                       </button>
                     </div>
 
-                    <p className="leading-relaxed text-slate-700">
-                      {moreInfoLearningOutcomesText}
-                    </p>
+                    <ol className="list-decimal space-y-2 pl-5 text-slate-700">
+                      {moreInfoLearningOutcomes.map((outcome) => (
+                        <li key={outcome} className="leading-relaxed">
+                          {outcome}
+                        </li>
+                      ))}
+                    </ol>
                   </div>
 
                   <div className="border-b border-slate-200 p-8">

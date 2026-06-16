@@ -1825,6 +1825,26 @@ ${context}`;
       return [];
     }
 
+    const cleanedSection = this.cleanPdfText(section)
+      .replace(
+        /^At\s+the\s+end\s+of\s+the\s+course,?\s+you\s+will\s+be\s+able\s+to:?\s*/i,
+        '',
+      )
+      .replace(/^The students who have succeeded in this course;\s*/i, '')
+      .trim();
+    const numbered = Array.from(
+      cleanedSection.matchAll(
+        /\b\d+\s*[.)]?\s*([A-Z][\s\S]*?)(?=\s+\d+\s*[.)]?\s*[A-Z]|$)/g,
+      ),
+    )
+      .map((match) => this.cleanPdfText(match[1]))
+      .map((item) => item.replace(/\s+([.,;:])/g, '$1').trim())
+      .filter((item) => item.length > 15);
+
+    if (numbered.length >= 2) {
+      return this.dedupeListItems(numbered).slice(0, 12);
+    }
+
     const outcomeVerbs = [
       'Understand',
       'Apply',
@@ -1833,14 +1853,17 @@ ${context}`;
       'Query',
       'Analyze',
       'Visualize',
+      'Describe',
+      'Define',
+      'Explain',
+      'Develop',
+      'Evaluate',
+      'Use',
     ];
     const verbPattern = outcomeVerbs.join('|');
     const byVerb = new Map<string, string>();
-    const normalizedSection = section
-      .replace(/^The students who have succeeded in this course;\s*/i, '')
-      .trim();
     const verbMatches = Array.from(
-      normalizedSection.matchAll(
+      cleanedSection.matchAll(
         new RegExp(
           `\\b(${verbPattern})\\b([\\s\\S]*?)(?=\\b(?:${verbPattern})\\b|$)`,
           'gi',
@@ -1865,17 +1888,7 @@ ${context}`;
       .filter((item): item is string => Boolean(item));
 
     if (orderedOutcomes.length) {
-      return [
-        `The students who have succeeded in this course; ${orderedOutcomes.join(' ')}`,
-      ];
-    }
-
-    const numbered = Array.from(section.matchAll(/\b\d+\.\s*([^.;]+[.;]?)/g))
-      .map((match) => match[1].trim())
-      .filter(Boolean);
-
-    if (numbered.length) {
-      return numbered.slice(0, 10);
+      return this.dedupeListItems(orderedOutcomes).slice(0, 12);
     }
 
     return this.extractSentences(section, ['student', 'students', 'course']).slice(
@@ -1893,14 +1906,26 @@ ${context}`;
     const knownMethods = [
       'Case Study',
       'Collaborative Learning',
+      'Differentiation',
       'Discussion',
+      'Drama',
+      'Educational Game',
+      'Experiment',
+      'Field Trip',
+      'Fieldwork',
+      'Guest Speaker',
       'Implementation',
       'Individual Study',
+      'Internship',
       'Lecture',
+      'Observation',
       'Problem Solving',
       'Project',
       'Reading',
+      'Simulation',
+      'Social Activity',
       'Technology-Enhanced Learning',
+      'Other',
     ];
 
     if (section) {
@@ -1914,7 +1939,7 @@ ${context}`;
         ),
       )
         .filter((match) => /[☑☒✓✔]/.test(match[1]))
-        .map((match) => this.cleanPdfText(match[2]))
+        .map((match) => this.normalizeTeachingMethodLabel(match[2]))
         .map((value) =>
           knownMethods.find(
             (method) => method.toLowerCase() === value.toLowerCase(),
@@ -1946,7 +1971,7 @@ ${context}`;
       startMatch.index + startMatch[0].length,
     );
     const endMatch = afterStart.match(
-      /\bTeaching\s+Methods\s+and\s+Techniques\s+Used\s+in\s+the\s+Course\b|\bCourse Policies\b|\bCommunication Channels and Methods\b/i,
+      /\bTeaching\s+Methods\s+and\s+Techniques\s+Used\s+in\s+the\s+Course\b|\bTeaching\s+M\b|\bCourse Policies\b|\bCommunication Channels and Methods\b/i,
     );
 
     return this.cleanCourseStructureText(
@@ -1969,14 +1994,50 @@ ${context}`;
   }
 
   private cleanCourseStructureText(value: string) {
-    const beforeBrokenHeading = value.replace(/\s+Teaching\s+M\b[\s\S]*$/i, '');
+    const beforeBrokenHeading = value.replace(
+      /\s+Teaching\s+(?:Methods|M)\b[\s\S]*$/i,
+      '',
+    );
     const sentences = beforeBrokenHeading
+      .replace(/[ï‚·â€¢]\s*/g, '\n')
+      .replace(/[â–ªâ– â–¡☐☑☒✓✔]\s*/g, ' ')
       .split(/(?<=[.!?])\s+/)
       .map((sentence) => sentence.trim())
+      .map((sentence) => this.cleanPdfText(sentence))
       .filter(Boolean);
     const uniqueSentences = Array.from(new Set(sentences));
 
     return this.preview(uniqueSentences.join(' '), 1800);
+  }
+
+  private dedupeListItems(items: string[]) {
+    const unique: string[] = [];
+
+    for (const item of items) {
+      const normalized = this.normalizeForComparison(item);
+      const duplicate = unique.some(
+        (existing) =>
+          this.normalizeForComparison(existing) === normalized ||
+          existing.includes(item) ||
+          item.includes(existing),
+      );
+
+      if (!duplicate) {
+        unique.push(item);
+      }
+    }
+
+    return unique;
+  }
+
+  private normalizeTeachingMethodLabel(value: string) {
+    return this.cleanPdfText(value)
+      .replace(
+        /Technology\s*-?\s*Enhanced\s+Learning|TechnologyEnhanced\s+Learning/i,
+        'Technology-Enhanced Learning',
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private capitalizeWord(value: string) {

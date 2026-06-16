@@ -733,6 +733,30 @@ export default function CourseDetailPage() {
       .map((line) => line.trim())
       .filter(Boolean);
   };
+  const cleanExtractedDisplayText = (value?: string | null) =>
+    (value || "")
+      .replace(/[â–ªâ– â–¡☐☑☒✓✔]/g, " ")
+      .replace(/[ï‚·â€¢]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const normalizeOutcomeItems = (items: string[]) => {
+    const verbs =
+      "Describe|Define|Explain|Apply|Analyze|Evaluate|Understand|Develop|Use|Import|Prepare|Query|Visualize";
+
+    return items
+      .flatMap((item) => {
+        const cleaned = cleanExtractedDisplayText(item)
+          .replace(/^The students who have succeeded in this course;\s*/i, "")
+          .trim();
+        const parts = cleaned
+          .split(new RegExp(`\\s+(?=${verbs}\\b)`, "g"))
+          .map((part) => part.trim())
+          .filter((part) => part.length > 15);
+
+        return parts.length > 1 ? parts : [cleaned];
+      })
+      .filter(Boolean);
+  };
   const aiInstructorInfo = aiSummary?.instructorInfo;
   const aiCourseInfo = aiSummary?.courseInfo;
   const aiPolicySections = aiSummary?.policySections;
@@ -854,6 +878,31 @@ export default function CourseDetailPage() {
   const featuredWeeks = syllabusWeeks.slice(0, 3);
   const syllabusDescription =
     aiSummary?.courseSummary || getSyllabusDescriptionText(resolvedSyllabus);
+  const moreInfoLearningOutcomes = displayedMoreInfo.learningOutcomes.length
+    ? normalizeOutcomeItems(displayedMoreInfo.learningOutcomes)
+    : syllabusDescription
+      ? splitSummaryText(syllabusDescription)
+      : [
+          "Describe the course expectations and learning goals.",
+          "Follow the weekly syllabus plan and course deliverables.",
+          "Use announcements, resources, grading details, and deadlines effectively.",
+          "Apply course knowledge to assignments, projects, and assessments.",
+        ];
+  const courseStructureDescription =
+    cleanExtractedDisplayText(displayedMoreInfo.courseStructure) ||
+    "This course uses a variety of teaching and learning methods to support understanding, participation, and practical application.";
+  const courseStructureItems = displayedMoreInfo.teachingMethods.length
+    ? displayedMoreInfo.teachingMethods
+    : [
+        "Collaborative Learning",
+        "Discussion",
+        "Guest Speaker",
+        "Lecture",
+        "Observation",
+        "Problem Solving",
+        "Reading",
+        "Technology-Enhanced Learning",
+      ];
   const syllabusDocument = getSyllabusDocumentMetadata(resolvedSyllabus);
   const aiGradingRows =
     aiSummary?.gradingItems.map((item, index) => ({
@@ -2402,19 +2451,13 @@ export default function CourseDetailPage() {
                     </h3>
                   </div>
 
-                  <p className="leading-relaxed text-slate-700">
-                    {(displayedMoreInfo.learningOutcomes.length
-                      ? displayedMoreInfo.learningOutcomes
-                      : syllabusDescription
-                        ? splitSummaryText(syllabusDescription)
-                        : [
-                            "Describe the course expectations and learning goals.",
-                            "Follow the weekly syllabus plan and course deliverables.",
-                            "Use announcements, resources, grading details, and deadlines effectively.",
-                            "Apply course knowledge to assignments, projects, and assessments.",
-                          ]
-                    ).join(" ")}
-                  </p>
+                  <ol className="list-decimal space-y-2 pl-5 text-slate-700">
+                    {moreInfoLearningOutcomes.map((outcome) => (
+                      <li key={outcome} className="leading-relaxed">
+                        {outcome}
+                      </li>
+                    ))}
+                  </ol>
                 </div>
 
                 <div className="border-b border-slate-200 p-8">
@@ -2438,24 +2481,11 @@ export default function CourseDetailPage() {
                   </div>
 
                   <p className="mb-6 text-slate-700">
-                    {displayedMoreInfo.courseStructure ||
-                      "This course uses a variety of teaching and learning methods to support understanding, participation, and practical application."}
+                    {courseStructureDescription}
                   </p>
 
                   <div className="grid grid-cols-2 gap-x-8 gap-y-3 md:grid-cols-4">
-                    {(displayedMoreInfo.teachingMethods.length
-                      ? displayedMoreInfo.teachingMethods
-                      : [
-                          "Collaborative Learning",
-                          "Discussion",
-                          "Guest Speaker",
-                          "Lecture",
-                          "Observation",
-                          "Problem Solving",
-                          "Reading",
-                          "Technology-Enhanced Learning",
-                        ]
-                    ).map((method) => (
+                    {courseStructureItems.map((method) => (
                       <div key={method} className="flex items-start gap-3">
                         <div className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400" />
                         <span className="text-sm text-slate-700">{method}</span>
